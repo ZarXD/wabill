@@ -30,14 +30,14 @@ func TestSubmitPaymentProofValidation(t *testing.T) {
 
 	// Case 1: File too large
 	oversizedBytes := make([]byte, 2*1024*1024) // 2 MB
-	_, _, err := svc.SubmitPaymentProof(ctx, "628123@s.whatsapp.net", oversizedBytes)
+	_, _, err := svc.SubmitPaymentProof(ctx, "628123@s.whatsapp.net", "628123", oversizedBytes)
 	if err != domain.ErrFileTooLarge {
 		t.Errorf("expected ErrFileTooLarge, got: %v", err)
 	}
 
 	// Case 2: Invalid MIME type (text instead of image)
 	invalidTextBytes := []byte("this is plain text not an image")
-	_, _, err = svc.SubmitPaymentProof(ctx, "628123@s.whatsapp.net", invalidTextBytes)
+	_, _, err = svc.SubmitPaymentProof(ctx, "628123@s.whatsapp.net", "628123", invalidTextBytes)
 	if err != domain.ErrInvalidProofMedia {
 		t.Errorf("expected ErrInvalidProofMedia, got: %v", err)
 	}

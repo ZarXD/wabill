@@ -63,9 +63,13 @@ type MemberDetails struct {
 func (s *Service) GetOrCreateActiveInvoice(
 	ctx context.Context,
 	subscriberJID string,
+	subscriberPhone string,
 	pushName string,
 ) (*domain.Invoice, *domain.Plan, *domain.Subscription, bool, error) {
-	phone := config.NormalizePhone(subscriberJID)
+	phone := config.NormalizePhone(subscriberPhone)
+	if phone == "" {
+		phone = config.NormalizePhone(subscriberJID)
+	}
 	sub, err := s.subscriberRepo.GetSubscriberByPhoneOrJID(ctx, phone, subscriberJID)
 	if err != nil || sub.Status != domain.SubscriberActive {
 		return nil, nil, nil, false, domain.ErrSubscriberNotFound
@@ -124,8 +128,11 @@ func (s *Service) GetOrCreateActiveInvoice(
 }
 
 // GetCustomerStatus fetches subscriber profile, active plan, and subscription.
-func (s *Service) GetCustomerStatus(ctx context.Context, subscriberJID string) (*domain.Subscriber, *domain.Plan, *domain.Subscription, error) {
-	phone := config.NormalizePhone(subscriberJID)
+func (s *Service) GetCustomerStatus(ctx context.Context, subscriberJID, subscriberPhone string) (*domain.Subscriber, *domain.Plan, *domain.Subscription, error) {
+	phone := config.NormalizePhone(subscriberPhone)
+	if phone == "" {
+		phone = config.NormalizePhone(subscriberJID)
+	}
 	sub, err := s.subscriberRepo.GetSubscriberByPhoneOrJID(ctx, phone, subscriberJID)
 	if err != nil || sub.Status != domain.SubscriberActive {
 		return nil, nil, nil, domain.ErrSubscriberNotFound
@@ -148,8 +155,11 @@ func (s *Service) GetCustomerStatus(ctx context.Context, subscriberJID string) (
 }
 
 // GetCustomerHistory fetches recent invoices for customer.
-func (s *Service) GetCustomerHistory(ctx context.Context, subscriberJID string, limit int) ([]*domain.Invoice, error) {
-	phone := config.NormalizePhone(subscriberJID)
+func (s *Service) GetCustomerHistory(ctx context.Context, subscriberJID, subscriberPhone string, limit int) ([]*domain.Invoice, error) {
+	phone := config.NormalizePhone(subscriberPhone)
+	if phone == "" {
+		phone = config.NormalizePhone(subscriberJID)
+	}
 	sub, err := s.subscriberRepo.GetSubscriberByPhoneOrJID(ctx, phone, subscriberJID)
 	if err != nil {
 		return nil, err
@@ -158,8 +168,11 @@ func (s *Service) GetCustomerHistory(ctx context.Context, subscriberJID string, 
 }
 
 // GetLatestInvoice gets the most recent invoice for the user regardless of status.
-func (s *Service) GetLatestInvoice(ctx context.Context, subscriberJID string) (*domain.Invoice, *domain.Plan, error) {
-	phone := config.NormalizePhone(subscriberJID)
+func (s *Service) GetLatestInvoice(ctx context.Context, subscriberJID, subscriberPhone string) (*domain.Invoice, *domain.Plan, error) {
+	phone := config.NormalizePhone(subscriberPhone)
+	if phone == "" {
+		phone = config.NormalizePhone(subscriberJID)
+	}
 	sub, err := s.subscriberRepo.GetSubscriberByPhoneOrJID(ctx, phone, subscriberJID)
 	if err != nil {
 		return nil, nil, err
@@ -178,6 +191,7 @@ func (s *Service) GetLatestInvoice(ctx context.Context, subscriberJID string) (*
 func (s *Service) SubmitPaymentProof(
 	ctx context.Context,
 	subscriberJID string,
+	subscriberPhone string,
 	fileBytes []byte,
 ) (*domain.Invoice, *domain.PaymentProof, error) {
 	// 1. Verify file size (prevent memory/resource exhaustion before DB lookups)
@@ -200,7 +214,10 @@ func (s *Service) SubmitPaymentProof(
 		return nil, nil, domain.ErrInvalidProofMedia
 	}
 
-	phone := config.NormalizePhone(subscriberJID)
+	phone := config.NormalizePhone(subscriberPhone)
+	if phone == "" {
+		phone = config.NormalizePhone(subscriberJID)
+	}
 	sub, err := s.subscriberRepo.GetSubscriberByPhoneOrJID(ctx, phone, subscriberJID)
 	if err != nil || sub.Status != domain.SubscriberActive {
 		return nil, nil, domain.ErrSubscriberNotFound

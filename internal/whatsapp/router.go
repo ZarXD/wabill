@@ -230,7 +230,7 @@ func (r *Router) handleCommand(ctx context.Context, p *ParsedMessage) {
 }
 
 func (r *Router) handleBayar(ctx context.Context, p *ParsedMessage) {
-	inv, _, _, isNew, err := r.billingService.GetOrCreateActiveInvoice(ctx, p.SenderJID, p.PushName)
+	inv, _, _, isNew, err := r.billingService.GetOrCreateActiveInvoice(ctx, p.SenderJID, p.SenderPhone, p.PushName)
 	if err != nil {
 		log.Printf("[Router] Failed to create/get invoice: %v", err)
 		_ = r.waClient.SendText(ctx, p.SenderJID, "Maaf, terjadi kesalahan saat memproses tagihan kamu. Silakan coba lagi nanti.")
@@ -257,7 +257,7 @@ func (r *Router) handleBayar(ctx context.Context, p *ParsedMessage) {
 }
 
 func (r *Router) handleTagihan(ctx context.Context, p *ParsedMessage) {
-	inv, plan, err := r.billingService.GetLatestInvoice(ctx, p.SenderJID)
+	inv, plan, err := r.billingService.GetLatestInvoice(ctx, p.SenderJID, p.SenderPhone)
 	if err != nil || inv == nil {
 		_ = r.waClient.SendText(ctx, p.SenderJID, "Kamu belum memiliki tagihan aktif. Ketik *bayar* untuk membuat tagihan baru.")
 		return
@@ -280,7 +280,7 @@ func (r *Router) handleTagihan(ctx context.Context, p *ParsedMessage) {
 }
 
 func (r *Router) handleStatus(ctx context.Context, p *ParsedMessage) {
-	sub, plan, subscription, err := r.billingService.GetCustomerStatus(ctx, p.SenderJID)
+	sub, plan, subscription, err := r.billingService.GetCustomerStatus(ctx, p.SenderJID, p.SenderPhone)
 	if err != nil || sub == nil {
 		_ = r.waClient.SendText(ctx, p.SenderJID, "Kamu belum terdaftar sebagai member. Ketik *bayar* untuk mulai mendaftar dan berlangganan.")
 		return
@@ -295,7 +295,7 @@ func (r *Router) handleStatus(ctx context.Context, p *ParsedMessage) {
 }
 
 func (r *Router) handleRiwayat(ctx context.Context, p *ParsedMessage) {
-	invoices, err := r.billingService.GetCustomerHistory(ctx, p.SenderJID, 5)
+	invoices, err := r.billingService.GetCustomerHistory(ctx, p.SenderJID, p.SenderPhone, 5)
 	if err != nil {
 		_ = r.waClient.SendText(ctx, p.SenderJID, "Belum ada riwayat transaksi yang ditemukan.")
 		return
@@ -328,7 +328,7 @@ func (r *Router) handleImageProof(ctx context.Context, p *ParsedMessage) {
 		return
 	}
 
-	inv, proof, err := r.billingService.SubmitPaymentProof(ctx, p.SenderJID, imgBytes)
+	inv, proof, err := r.billingService.SubmitPaymentProof(ctx, p.SenderJID, p.SenderPhone, imgBytes)
 	if err != nil {
 		switch {
 		case errors.Is(err, domain.ErrInvoiceNotFound):
