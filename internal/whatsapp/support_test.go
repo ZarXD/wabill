@@ -47,6 +47,14 @@ func TestSupportSessionManager(t *testing.T) {
 
 	// Test timeout
 	mgr.OpenSession(phone, jid, name)
+	// Test ShouldSendFeedback throttling
+	if !mgr.ShouldSendFeedback(phone) {
+		t.Fatalf("Expected ShouldSendFeedback to be true on first call")
+	}
+	if mgr.ShouldSendFeedback(phone) {
+		t.Fatalf("Expected ShouldSendFeedback to be false on immediate second call")
+	}
+
 	time.Sleep(600 * time.Millisecond)
 	if mgr.HasActiveSession(phone) {
 		t.Fatalf("Expected session to timeout after 500ms")

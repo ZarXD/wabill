@@ -7,11 +7,12 @@ import (
 
 // SupportSession represents an active customer support ticket session.
 type SupportSession struct {
-	PhoneNumber string
-	CustomerJID string
-	PushName    string
-	StartedAt   time.Time
-	LastActive  time.Time
+	PhoneNumber  string
+	CustomerJID  string
+	PushName     string
+	StartedAt    time.Time
+	LastActive   time.Time
+	LastNotified time.Time
 }
 
 // SupportSessionManager manages ongoing live support chats in memory.
@@ -42,11 +43,12 @@ func (m *SupportSessionManager) OpenSession(phone, jid, name string) *SupportSes
 
 	now := time.Now()
 	s := &SupportSession{
-		PhoneNumber: phone,
-		CustomerJID: jid,
-		PushName:    name,
-		StartedAt:   now,
-		LastActive:  now,
+		PhoneNumber:  phone,
+		CustomerJID:  jid,
+		PushName:     name,
+		StartedAt:    now,
+		LastActive:   now,
+		LastNotified: time.Time{},
 	}
 	m.sessions[phone] = s
 	return s
@@ -69,6 +71,26 @@ func (m *SupportSessionManager) GetSession(phone string) *SupportSession {
 
 	s.LastActive = time.Now()
 	return s
+}
+
+// ShouldSendFeedback checks if the bot should send the "Pesan kamu telah diteruskan..." confirmation to the customer.
+// It returns true on the first message or if it has been at least 3 minutes since the last notification, avoiding duplicate spam.
+func (m *SupportSessionManager) ShouldSendFeedback(phone string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	s, exists := m.sessions[phone]
+	if !exists {
+		return false
+	}
+
+	now := time.Now()
+	if s.LastNotified.IsZero() || now.Sub(s.LastNotified) > 3*time.Minute {
+		s.LastNotified = now
+		return true
+	}
+
+	return false
 }
 
 // HasActiveSession checks if a customer is currently in an active support session.

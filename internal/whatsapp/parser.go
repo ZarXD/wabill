@@ -87,6 +87,30 @@ func ParseIncomingMessage(evt *events.Message) *ParsedMessage {
 
 	msg := evt.Message
 
+	// Unwrap wrapper messages (disappearing ephemeral messages, view once messages)
+	for msg != nil {
+		if msg.EphemeralMessage != nil && msg.EphemeralMessage.Message != nil {
+			msg = msg.EphemeralMessage.Message
+		} else if msg.ViewOnceMessage != nil && msg.ViewOnceMessage.Message != nil {
+			msg = msg.ViewOnceMessage.Message
+		} else if msg.ViewOnceMessageV2 != nil && msg.ViewOnceMessageV2.Message != nil {
+			msg = msg.ViewOnceMessageV2.Message
+		} else if msg.DocumentWithCaptionMessage != nil && msg.DocumentWithCaptionMessage.Message != nil {
+			msg = msg.DocumentWithCaptionMessage.Message
+		} else {
+			break
+		}
+	}
+
+	if msg == nil {
+		return nil
+	}
+
+	// Silently ignore non-chat protocol messages, reactions, receipts, poll updates, etc.
+	if msg.ProtocolMessage != nil || msg.ReactionMessage != nil || msg.EncReactionMessage != nil || msg.PollUpdateMessage != nil {
+		return nil
+	}
+
 	// Extract text or button clicks from various WhatsApp protobuf wrappers
 	switch {
 	case msg.Conversation != nil:
@@ -119,6 +143,11 @@ func ParseIncomingMessage(evt *events.Message) *ParsedMessage {
 		if msg.ImageMessage.Caption != nil {
 			parsed.RawText = *msg.ImageMessage.Caption
 		}
+	}
+
+	// Discard messages that have no text, no button, and no image
+	if strings.TrimSpace(parsed.RawText) == "" && parsed.ButtonID == "" && parsed.ImageMessage == nil {
+		return nil
 	}
 
 	// Resolve text to logical command

@@ -211,6 +211,24 @@ func TestParseIncomingMessage(t *testing.T) {
 			wantCommand: whatsapp.CmdAdminMembers,
 			wantArgsLen: 1,
 		},
+		{
+			name: "Ephemeral disappearing message unwrapping",
+			evt: &events.Message{
+				Info: types.MessageInfo{
+					MessageSource: types.MessageSource{Sender: testJID},
+					ID:            "MSG15",
+				},
+				Message: &waE2E.Message{
+					EphemeralMessage: &waE2E.FutureProofMessage{
+						Message: &waE2E.Message{
+							Conversation: proto.String("status"),
+						},
+					},
+				},
+			},
+			wantCommand: whatsapp.CmdStatus,
+			wantArgsLen: 0,
+		},
 	}
 
 	for _, tt := range tests {
@@ -224,6 +242,63 @@ func TestParseIncomingMessage(t *testing.T) {
 			}
 			if len(parsed.CommandArgs) != tt.wantArgsLen {
 				t.Errorf("CommandArgs len = %v, want %v", len(parsed.CommandArgs), tt.wantArgsLen)
+			}
+		})
+	}
+}
+
+func TestParseIncomingMessageIgnored(t *testing.T) {
+	testJID := types.NewJID("628123456789", types.DefaultUserServer)
+
+	ignoredCases := []struct {
+		name string
+		evt  *events.Message
+	}{
+		{
+			name: "Reaction message should be ignored",
+			evt: &events.Message{
+				Info: types.MessageInfo{
+					MessageSource: types.MessageSource{Sender: testJID},
+					ID:            "REACTION_1",
+				},
+				Message: &waE2E.Message{
+					ReactionMessage: &waE2E.ReactionMessage{
+						Text: proto.String("👍"),
+					},
+				},
+			},
+		},
+		{
+			name: "Protocol message should be ignored",
+			evt: &events.Message{
+				Info: types.MessageInfo{
+					MessageSource: types.MessageSource{Sender: testJID},
+					ID:            "PROTO_1",
+				},
+				Message: &waE2E.Message{
+					ProtocolMessage: &waE2E.ProtocolMessage{},
+				},
+			},
+		},
+		{
+			name: "Empty text message should be ignored",
+			evt: &events.Message{
+				Info: types.MessageInfo{
+					MessageSource: types.MessageSource{Sender: testJID},
+					ID:            "EMPTY_1",
+				},
+				Message: &waE2E.Message{
+					Conversation: proto.String("   "),
+				},
+			},
+		},
+	}
+
+	for _, tt := range ignoredCases {
+		t.Run(tt.name, func(t *testing.T) {
+			parsed := whatsapp.ParseIncomingMessage(tt.evt)
+			if parsed != nil {
+				t.Errorf("expected parsed message to be nil for %s, got %+v", tt.name, parsed)
 			}
 		})
 	}

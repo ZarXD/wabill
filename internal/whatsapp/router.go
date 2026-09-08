@@ -125,6 +125,10 @@ func (r *Router) processMessageEvent(msgEvt *events.Message) {
 
 	// 5. Check if customer is in an active live support session
 	if !isAdmin && r.supportMgr.HasActiveSession(userKey) {
+		if strings.TrimSpace(parsed.RawText) == "" && parsed.ImageMessage == nil {
+			return
+		}
+
 		switch parsed.Command {
 		case CmdCloseSupport:
 			typingMs := 1000 + rand.Intn(500)
@@ -691,6 +695,12 @@ func (r *Router) handleStartSupport(ctx context.Context, p *ParsedMessage) {
 }
 
 func (r *Router) handleCustomerSupportMessage(ctx context.Context, p *ParsedMessage) {
+	inquiry := strings.TrimSpace(p.RawText)
+	if inquiry == "" && p.ImageMessage == nil {
+		log.Printf("[Router] Ignored empty support message from %s", p.SenderJID)
+		return
+	}
+
 	name := p.PushName
 	phone := p.SenderPhone
 	if sub, _ := r.billingService.IsRegisteredSubscriber(ctx, p.SenderJID, p.SenderPhone); sub != nil {
@@ -702,7 +712,6 @@ func (r *Router) handleCustomerSupportMessage(ctx context.Context, p *ParsedMess
 		}
 	}
 
-	inquiry := strings.TrimSpace(p.RawText)
 	if inquiry == "" && p.ImageMessage != nil {
 		inquiry = "[Mengirim Foto / Tangkapan Layar]"
 	}
@@ -722,8 +731,14 @@ func (r *Router) handleCustomerSupportMessage(ctx context.Context, p *ParsedMess
 		}
 	}
 
-	// Feedback to customer
-	_ = r.waClient.SendText(ctx, p.SenderJID, "📨 Pesan kamu telah diteruskan ke Admin. Mohon tunggu balasan ya 🙏\n\n_(Ketik *selesai* jika kendala sudah terselesaikan)_")
+	// Feedback to customer (throttled to avoid duplicate spam on rapid/consecutive messages)
+	userKey := p.SenderPhone
+	if userKey == "" {
+		userKey = p.SenderJID
+	}
+	if r.supportMgr.ShouldSendFeedback(userKey) {
+		_ = r.waClient.SendText(ctx, p.SenderJID, "📨 Pesan kamu telah diteruskan ke Admin. Mohon tunggu balasan ya 🙏\n\n_(Ketik *selesai* jika kendala sudah terselesaikan)_")
+	}
 }
 
 func (r *Router) handleCloseSupport(ctx context.Context, p *ParsedMessage) {
