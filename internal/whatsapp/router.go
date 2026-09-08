@@ -667,13 +667,18 @@ func (r *Router) handleAdminSetExpiry(ctx context.Context, p *ParsedMessage) {
 
 	phone := p.CommandArgs[0]
 	dateStr := p.CommandArgs[1]
-	t, err := time.Parse("2006-01-02", dateStr)
+
+	loc := r.cfg.AppTimezone
+	if loc == nil {
+		loc = time.UTC
+	}
+	t, err := time.ParseInLocation("2006-01-02", dateStr, loc)
 	if err != nil {
 		_ = r.waClient.SendText(ctx, p.SenderJID, "Format tanggal salah. Gunakan format YYYY-MM-DD, contoh: 2026-10-01")
 		return
 	}
 
-	expiry := time.Date(t.Year(), t.Month(), t.Day(), 23, 59, 59, 0, time.UTC)
+	expiry := time.Date(t.Year(), t.Month(), t.Day(), 23, 59, 59, 0, loc).UTC()
 	err = r.billingService.SetMemberExpiry(ctx, phone, expiry)
 	if err != nil {
 		_ = r.waClient.SendText(ctx, p.SenderJID, fmt.Sprintf("Gagal mengatur masa aktif: %v", err))

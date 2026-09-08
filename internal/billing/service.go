@@ -477,10 +477,14 @@ func (s *Service) AddMember(ctx context.Context, phone, name, planName string, c
 		cycleDay = 1 // Default to 1st of month
 	}
 
-	// Calculate initial expiry aligned to cycleDay
-	now := time.Now().UTC()
+	// Calculate initial expiry aligned to cycleDay in configured AppTimezone (23:59:59 local time)
+	loc := s.cfg.AppTimezone
+	if loc == nil {
+		loc = time.UTC
+	}
+	now := time.Now().In(loc)
 	targetMonth := now.AddDate(0, 1, 0)
-	initialExpiry := time.Date(targetMonth.Year(), targetMonth.Month(), cycleDay, 23, 59, 59, 0, time.UTC)
+	initialExpiry := time.Date(targetMonth.Year(), targetMonth.Month(), cycleDay, 23, 59, 59, 0, loc).UTC()
 
 	// Check if already exists in DB
 	sub, err := s.subscriberRepo.GetSubscriberByPhoneOrJID(ctx, cleanPhone, "")
