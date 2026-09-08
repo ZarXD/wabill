@@ -1,0 +1,22 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+wabill
+
+# Environment variables
+.env
+
+# Persistent storage & proofs
+data/
+*.db
+
+# Build & caches
+.gocache/
+vendor/
+
+# OS files
+.DS_Store
+Thumbs.db
