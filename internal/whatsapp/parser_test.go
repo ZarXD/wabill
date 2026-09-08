@@ -141,6 +141,33 @@ func TestParseIncomingMessage(t *testing.T) {
 			wantCommand: whatsapp.CmdCloseSupport,
 		},
 		{
+			name: "Customer greeting 'halo'",
+			evt: &events.Message{
+				Info: types.MessageInfo{
+					MessageSource: types.MessageSource{Sender: testJID},
+					ID:            "MSG9_HALO",
+				},
+				Message: &waE2E.Message{
+					Conversation: proto.String("halo"),
+				},
+			},
+			wantCommand: whatsapp.CmdMenu,
+		},
+		{
+			name: "Customer greeting 'halo admin'",
+			evt: &events.Message{
+				Info: types.MessageInfo{
+					MessageSource: types.MessageSource{Sender: testJID},
+					ID:            "MSG9_HALO_ADMIN",
+				},
+				Message: &waE2E.Message{
+					Conversation: proto.String("halo admin"),
+				},
+			},
+			wantCommand: whatsapp.CmdSupport,
+			wantArgsLen: 1,
+		},
+		{
 			name: "Admin command '/reply 08123456789 Halo'",
 			evt: &events.Message{
 				Info: types.MessageInfo{

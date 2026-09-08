@@ -129,39 +129,28 @@ func (r *Router) processMessageEvent(msgEvt *events.Message) {
 			return
 		}
 
-		switch parsed.Command {
-		case CmdCloseSupport:
+		// In an active support session, customer is chatting directly with human admin.
+		// Only explicit close or explicit menu button clicks are intercepted.
+		// All conversational text, greetings, and questions MUST be forwarded to the admin!
+		if parsed.Command == CmdCloseSupport {
 			typingMs := 1000 + rand.Intn(500)
 			_ = r.waClient.SimulateTyping(ctx, parsed.SenderJID, time.Duration(typingMs)*time.Millisecond)
 			r.handleCloseSupport(ctx, parsed)
 			return
-		case CmdBayar:
-			typingMs := 1000 + rand.Intn(500)
-			_ = r.waClient.SimulateTyping(ctx, parsed.SenderJID, time.Duration(typingMs)*time.Millisecond)
-			r.handleBayar(ctx, parsed)
-			return
-		case CmdStatus:
-			typingMs := 1000 + rand.Intn(500)
-			_ = r.waClient.SimulateTyping(ctx, parsed.SenderJID, time.Duration(typingMs)*time.Millisecond)
-			r.handleStatus(ctx, parsed)
-			return
-		case CmdRiwayat:
-			typingMs := 1000 + rand.Intn(500)
-			_ = r.waClient.SimulateTyping(ctx, parsed.SenderJID, time.Duration(typingMs)*time.Millisecond)
-			r.handleRiwayat(ctx, parsed)
-			return
-		case CmdMenu:
+		}
+
+		if parsed.ButtonID == "btn_menu" || strings.EqualFold(strings.TrimSpace(parsed.RawText), "menu") || strings.EqualFold(strings.TrimSpace(parsed.RawText), "/menu") {
 			typingMs := 1000 + rand.Intn(500)
 			_ = r.waClient.SimulateTyping(ctx, parsed.SenderJID, time.Duration(typingMs)*time.Millisecond)
 			r.handleMenu(ctx, parsed)
 			return
-		default:
-			// Forward text, complaint, or image to admin live support
-			typingMs := 800 + rand.Intn(600)
-			_ = r.waClient.SimulateTyping(ctx, parsed.SenderJID, time.Duration(typingMs)*time.Millisecond)
-			r.handleCustomerSupportMessage(ctx, parsed)
-			return
 		}
+
+		// Forward text, complaint, or image to admin live support
+		typingMs := 800 + rand.Intn(600)
+		_ = r.waClient.SimulateTyping(ctx, parsed.SenderJID, time.Duration(typingMs)*time.Millisecond)
+		r.handleCustomerSupportMessage(ctx, parsed)
+		return
 	}
 
 	// 6. If not in support session and this is an unrelated chat message (CmdUnknown and not an image), ignore silently

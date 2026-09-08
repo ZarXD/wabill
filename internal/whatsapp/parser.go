@@ -188,8 +188,19 @@ func resolveCommand(p *ParsedMessage) {
 		p.Command = CmdStatus
 	case "riwayat", "3", "btn_riwayat", "history":
 		p.Command = CmdRiwayat
-	case "menu", "help", "4", "btn_menu", "halo", "hi", "p":
+	case "menu", "help", "4", "btn_menu":
 		p.Command = CmdMenu
+	case "halo", "hi", "hai", "helo", "hello", "p":
+		if len(parts) == 1 {
+			p.Command = CmdMenu
+		} else if len(parts) == 2 {
+			second := strings.ToLower(parts[1])
+			if second == "admin" || second == "min" || second == "cs" {
+				p.Command = CmdSupport
+			} else if second == "bot" {
+				p.Command = CmdMenu
+			}
+		}
 	case "bantuan", "support", "cs", "btn_bantuan", "5":
 		p.Command = CmdSupport
 	case "selesai", "exit", "tutup", "btn_selesai":
