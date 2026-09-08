@@ -34,7 +34,8 @@ func NewRouter(
 	waClient WhatsAppClient,
 	dedupRepo *storage.DeduplicationRepo,
 ) *Router {
-	return &Router{
+	supportMgr := NewSupportSessionManager(5 * time.Minute)
+	r := &Router{
 		cfg:            cfg,
 		billingService: billingSvc,
 		waClient:       waClient,
@@ -45,7 +46,30 @@ func NewRouter(
 			Cooldown:       8 * time.Second,
 		}),
 		userLock:   NewKeyedMutex(),
-		supportMgr: NewSupportSessionManager(1 * time.Hour),
+		supportMgr: supportMgr,
+	}
+
+	// Auto-close notification when a support session times out after 5 minutes of inactivity
+	supportMgr.SetOnTimeout(func(s *SupportSession) {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+
+		log.Printf("[Router] Support session for %s timed out after 5 minutes of inactivity", s.PhoneNumber)
+		_ = waClient.SendText(ctx, s.CustomerJID, TemplateSupportSessionTimeoutCustomer())
+
+		adminNotice := TemplateSupportSessionTimeoutAdmin(s.PushName, s.PhoneNumber)
+		for _, adminJID := range cfg.AdminJIDs {
+			_ = waClient.SendText(ctx, adminJID, adminNotice)
+		}
+	})
+
+	return r
+}
+
+// Close gracefully stops router background managers.
+func (r *Router) Close() {
+	if r.supportMgr != nil {
+		r.supportMgr.Stop()
 	}
 }
 
@@ -129,24 +153,28 @@ func (r *Router) processMessageEvent(msgEvt *events.Message) {
 			return
 		}
 
-		// In an active support session, customer is chatting directly with human admin.
-		// Only explicit close or explicit menu button clicks are intercepted.
-		// All conversational text, greetings, and questions MUST be forwarded to the admin!
-		if parsed.Command == CmdCloseSupport {
+		// 1. Did customer request to close support?
+		if parsed.Command == CmdCloseSupport || parsed.ButtonID == "btn_selesai" {
 			typingMs := 1000 + rand.Intn(500)
 			_ = r.waClient.SimulateTyping(ctx, parsed.SenderJID, time.Duration(typingMs)*time.Millisecond)
 			r.handleCloseSupport(ctx, parsed)
 			return
 		}
 
-		if parsed.ButtonID == "btn_menu" || strings.EqualFold(strings.TrimSpace(parsed.RawText), "menu") || strings.EqualFold(strings.TrimSpace(parsed.RawText), "/menu") {
-			typingMs := 1000 + rand.Intn(500)
+		// 2. Did customer try to execute an explicit bot menu or command?
+		// Notify them that they are currently in a live support session with the admin.
+		if isExplicitBotCommand(parsed) {
+			typingMs := 800 + rand.Intn(400)
 			_ = r.waClient.SimulateTyping(ctx, parsed.SenderJID, time.Duration(typingMs)*time.Millisecond)
-			r.handleMenu(ctx, parsed)
+			warnMsg := TemplateSupportSessionActiveWarning()
+			buttons := []ButtonOption{
+				{ID: "btn_selesai", Text: "✅ Selesai Sesi Bantuan"},
+			}
+			_ = r.waClient.SendButtons(ctx, parsed.SenderJID, warnMsg, buttons)
 			return
 		}
 
-		// Forward text, complaint, or image to admin live support
+		// 3. Forward text, complaint, or image to admin live support
 		typingMs := 800 + rand.Intn(600)
 		_ = r.waClient.SimulateTyping(ctx, parsed.SenderJID, time.Duration(typingMs)*time.Millisecond)
 		r.handleCustomerSupportMessage(ctx, parsed)
@@ -821,4 +849,20 @@ func (r *Router) handleAdminMenu(ctx context.Context, p *ParsedMessage) {
 	}
 	msg := TemplateAdminMenu()
 	_ = r.waClient.SendText(ctx, p.SenderJID, msg)
+}
+
+// isExplicitBotCommand checks if a message from a customer in a support session is an intentional bot command attempt.
+func isExplicitBotCommand(p *ParsedMessage) bool {
+	if p.ButtonID != "" && p.ButtonID != "btn_selesai" {
+		return true
+	}
+	raw := strings.ToLower(strings.TrimSpace(p.RawText))
+	if strings.HasPrefix(raw, "/") {
+		return true
+	}
+	switch raw {
+	case "menu", "bayar", "tagihan", "status", "riwayat", "bantuan", "help", "invoice", "langganan", "history", "1", "2", "3", "4", "5":
+		return true
+	}
+	return false
 }

@@ -330,6 +330,24 @@ func TemplateSupportClosedAdmin(subName, subPhone string) string {
 	return fmt.Sprintf("✅ Sesi bantuan untuk member *%s* (%s) telah ditutup.", subName, FormatPhoneNumber(subPhone))
 }
 
+func TemplateSupportSessionActiveWarning() string {
+	return `⚠️ *Kamu saat ini masih terhubung dalam Sesi Bantuan bersama Admin.*
+
+Semua pesan yang kamu ketik di sini akan langsung dibaca dan dijawab oleh Admin kami.
+
+_Jika kamu ingin mengakhiri sesi bantuan dan kembali menggunakan menu bot otomatis, silakan ketik *selesai* atau klik tombol di bawah ini:_`
+}
+
+func TemplateSupportSessionTimeoutCustomer() string {
+	return `⏳ *Sesi bantuan telah berakhir otomatis karena tidak ada aktivitas selama 5 menit.*
+
+Terima kasih telah menghubungi kami! Jika kamu masih membutuhkan bantuan atau ingin mengakses menu bot, ketik *menu* atau *bantuan* kapan saja ya 🙏`
+}
+
+func TemplateSupportSessionTimeoutAdmin(subName, subPhone string) string {
+	return fmt.Sprintf("⏳ Sesi bantuan untuk member *%s* (%s) telah ditutup otomatis karena tidak ada aktivitas selama 5 menit.", subName, FormatPhoneNumber(subPhone))
+}
+
 func TemplateAdminMemberList(members []billing.MemberDetails, filter string, loc *time.Location) (string, []ButtonOption) {
 	var filtered []billing.MemberDetails
 	for _, m := range members {

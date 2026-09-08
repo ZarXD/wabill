@@ -45,7 +45,12 @@ func TestSupportSessionManager(t *testing.T) {
 		t.Fatalf("Expected session to be closed")
 	}
 
-	// Test timeout
+	// Test timeout and onTimeout callback
+	timeoutFired := make(chan string, 1)
+	mgr.SetOnTimeout(func(s *whatsapp.SupportSession) {
+		timeoutFired <- s.PhoneNumber
+	})
+
 	mgr.OpenSession(phone, jid, name)
 	// Test ShouldSendFeedback throttling
 	if !mgr.ShouldSendFeedback(phone) {
@@ -55,8 +60,20 @@ func TestSupportSessionManager(t *testing.T) {
 		t.Fatalf("Expected ShouldSendFeedback to be false on immediate second call")
 	}
 
-	time.Sleep(600 * time.Millisecond)
+	// Test Touch
+	mgr.Touch(phone)
+
+	select {
+	case timedOutPhone := <-timeoutFired:
+		if timedOutPhone != phone {
+			t.Errorf("Expected timeout for %s, got %s", phone, timedOutPhone)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("Expected onTimeout callback to be called within 2s")
+	}
+
 	if mgr.HasActiveSession(phone) {
 		t.Fatalf("Expected session to timeout after 500ms")
 	}
+	mgr.Stop()
 }

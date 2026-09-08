@@ -5,6 +5,9 @@ import (
 	"time"
 )
 
+// TimeoutHandler is called when a support session expires due to inactivity.
+type TimeoutHandler func(s *SupportSession)
+
 // SupportSession represents an active customer support ticket session.
 type SupportSession struct {
 	PhoneNumber  string
@@ -17,23 +20,33 @@ type SupportSession struct {
 
 // SupportSessionManager manages ongoing live support chats in memory.
 type SupportSessionManager struct {
-	mu       sync.RWMutex
-	sessions map[string]*SupportSession
-	timeout  time.Duration
+	mu        sync.RWMutex
+	sessions  map[string]*SupportSession
+	timeout   time.Duration
+	onTimeout TimeoutHandler
+	stopChan  chan struct{}
 }
 
-// NewSupportSessionManager creates a new SupportSessionManager.
+// NewSupportSessionManager creates a new SupportSessionManager with the specified timeout (default 5 minutes).
 func NewSupportSessionManager(timeout time.Duration) *SupportSessionManager {
 	if timeout <= 0 {
-		timeout = 1 * time.Hour
+		timeout = 5 * time.Minute
 	}
 	mgr := &SupportSessionManager{
 		sessions: make(map[string]*SupportSession),
 		timeout:  timeout,
+		stopChan: make(chan struct{}),
 	}
 
 	go mgr.cleanupLoop()
 	return mgr
+}
+
+// SetOnTimeout configures the callback function when a session times out due to inactivity.
+func (m *SupportSessionManager) SetOnTimeout(h TimeoutHandler) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.onTimeout = h
 }
 
 // OpenSession creates or resets a live support session for the customer.
@@ -73,6 +86,16 @@ func (m *SupportSessionManager) GetSession(phone string) *SupportSession {
 	return s
 }
 
+// Touch refreshes the activity timestamp of a session (e.g. when an admin replies).
+func (m *SupportSessionManager) Touch(phone string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if s, exists := m.sessions[phone]; exists {
+		s.LastActive = time.Now()
+	}
+}
+
 // ShouldSendFeedback checks if the bot should send the "Pesan kamu telah diteruskan..." confirmation to the customer.
 // It returns true on the first message or if it has been at least 3 minutes since the last notification, avoiding duplicate spam.
 func (m *SupportSessionManager) ShouldSendFeedback(phone string) bool {
@@ -98,7 +121,7 @@ func (m *SupportSessionManager) HasActiveSession(phone string) bool {
 	return m.GetSession(phone) != nil
 }
 
-// CloseSession ends an ongoing support session.
+// CloseSession ends an ongoing support session manually.
 func (m *SupportSessionManager) CloseSession(phone string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -110,18 +133,48 @@ func (m *SupportSessionManager) CloseSession(phone string) bool {
 	return false
 }
 
+// Stop terminates the background cleanup goroutine.
+func (m *SupportSessionManager) Stop() {
+	select {
+	case <-m.stopChan:
+		return
+	default:
+		close(m.stopChan)
+	}
+}
+
 func (m *SupportSessionManager) cleanupLoop() {
-	ticker := time.NewTicker(5 * time.Minute)
+	interval := 5 * time.Second
+	if m.timeout < 10*time.Second {
+		interval = 50 * time.Millisecond
+	}
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		m.mu.Lock()
-		now := time.Now()
-		for phone, session := range m.sessions {
-			if now.Sub(session.LastActive) > m.timeout {
-				delete(m.sessions, phone)
+	for {
+		select {
+		case <-m.stopChan:
+			return
+		case <-ticker.C:
+			var expired []*SupportSession
+
+			m.mu.Lock()
+			now := time.Now()
+			for phone, session := range m.sessions {
+				if now.Sub(session.LastActive) > m.timeout {
+					expired = append(expired, session)
+					delete(m.sessions, phone)
+				}
+			}
+			callback := m.onTimeout
+			m.mu.Unlock()
+
+			// Execute callback outside the lock to prevent deadlock or blocking
+			if callback != nil {
+				for _, s := range expired {
+					callback(s)
+				}
 			}
 		}
-		m.mu.Unlock()
 	}
 }

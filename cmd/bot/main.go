@@ -102,6 +102,7 @@ func main() {
 
 	log.Println("\n[Main] Shutdown signal received, terminating gracefully...")
 	sched.Stop()
+	router.Close()
 	sessionMgr.Close()
 	log.Println("[Main] wabill stopped cleanly. Goodbye!")
 }
