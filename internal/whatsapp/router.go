@@ -1061,6 +1061,7 @@ func (r *Router) handlePiketStatus(ctx context.Context, p *ParsedMessage) {
 }
 
 func (r *Router) handlePiketTambah(ctx context.Context, p *ParsedMessage) {
+	seen := make(map[string]bool)
 	var members []piket.Member
 
 	if len(p.MentionedJIDs) > 0 {
@@ -1069,6 +1070,11 @@ func (r *Router) handlePiketTambah(ctx context.Context, p *ParsedMessage) {
 			if atIdx := strings.Index(jid, "@"); atIdx != -1 {
 				user = jid[:atIdx]
 			}
+			if seen[user] {
+				continue
+			}
+			seen[user] = true
+
 			phone := config.NormalizePhone(user)
 			if phone == "" {
 				phone = user
@@ -1082,7 +1088,8 @@ func (r *Router) handlePiketTambah(ctx context.Context, p *ParsedMessage) {
 	} else if len(p.CommandArgs) > 0 {
 		for _, arg := range p.CommandArgs {
 			cleanPhone := config.NormalizePhone(arg)
-			if cleanPhone != "" {
+			if cleanPhone != "" && !seen[cleanPhone] {
+				seen[cleanPhone] = true
 				members = append(members, piket.Member{
 					Name:        cleanPhone,
 					PhoneNumber: cleanPhone,
@@ -1144,6 +1151,7 @@ func (r *Router) handlePiketHapus(ctx context.Context, p *ParsedMessage) {
 }
 
 func (r *Router) handlePiketGanti(ctx context.Context, p *ParsedMessage) {
+	seen := make(map[string]bool)
 	var mentionJIDs []string
 	var names []string
 
@@ -1153,6 +1161,11 @@ func (r *Router) handlePiketGanti(ctx context.Context, p *ParsedMessage) {
 			if atIdx := strings.Index(jid, "@"); atIdx != -1 {
 				user = jid[:atIdx]
 			}
+			if seen[user] {
+				continue
+			}
+			seen[user] = true
+
 			phone := config.NormalizePhone(user)
 			if phone == "" {
 				phone = user
@@ -1163,7 +1176,8 @@ func (r *Router) handlePiketGanti(ctx context.Context, p *ParsedMessage) {
 	} else if len(p.CommandArgs) > 0 {
 		for _, arg := range p.CommandArgs {
 			clean := config.NormalizePhone(arg)
-			if clean != "" {
+			if clean != "" && !seen[clean] {
+				seen[clean] = true
 				mentionJIDs = append(mentionJIDs, clean+"@s.whatsapp.net")
 				names = append(names, "@"+clean)
 			}

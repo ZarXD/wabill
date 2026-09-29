@@ -161,8 +161,8 @@ func ParseIncomingMessage(evt *events.Message) *ParsedMessage {
 		}
 	}
 
-	// Also extract explicit @628... or @08... mentions written directly in RawText as fallback
-	if parsed.RawText != "" {
+	// Also extract explicit @628... or @08... mentions written directly in RawText as fallback ONLY if no native mentions were supplied
+	if len(parsed.MentionedJIDs) == 0 && parsed.RawText != "" {
 		for _, word := range strings.Fields(parsed.RawText) {
 			if strings.HasPrefix(word, "@") {
 				clean := strings.TrimPrefix(word, "@")
