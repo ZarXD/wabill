@@ -292,17 +292,41 @@ func (s *Service) SubmitPhotoProof(
 	isAssigned := false
 	if slot != nil {
 		for _, m := range slot.Members {
-			if config.NormalizePhone(m.PhoneNumber) == cleanSenderPhone || config.NormalizePhone(m.WhatsAppJID) == cleanSenderPhone {
+			cleanMPhone := config.NormalizePhone(m.PhoneNumber)
+			if cleanSenderPhone != "" && cleanMPhone != "" && cleanMPhone == cleanSenderPhone {
 				isAssigned = true
 				break
+			}
+			cleanMJID := config.NormalizePhone(m.WhatsAppJID)
+			if cleanSenderPhone != "" && cleanMJID != "" && cleanMJID == cleanSenderPhone {
+				isAssigned = true
+				break
+			}
+			if strings.Contains(senderJID, "@lid") {
+				lidUser := strings.Split(senderJID, "@")[0]
+				if strings.Contains(m.WhatsAppJID, lidUser) || strings.Contains(m.PhoneNumber, lidUser) {
+					isAssigned = true
+					break
+				}
+			}
+		}
+	}
+
+	if !isAssigned && logRecord != nil && logRecord.AssignedMembersDisplay != "" {
+		if cleanSenderPhone != "" && strings.Contains(logRecord.AssignedMembersDisplay, cleanSenderPhone) {
+			isAssigned = true
+		}
+		if strings.Contains(senderJID, "@lid") {
+			lidUser := strings.Split(senderJID, "@")[0]
+			if strings.Contains(logRecord.AssignedMembersDisplay, lidUser) {
+				isAssigned = true
 			}
 		}
 	}
 
 	isAdmin := s.cfg.IsAdmin(senderJID, senderPhone)
-	hasCaption := strings.Contains(strings.ToLower(caption), "#pakan") || strings.Contains(strings.ToLower(caption), "pakan")
 
-	if !isAssigned && !isAdmin && !hasCaption {
+	if !isAssigned && !isAdmin {
 		return nil, nil, ErrUnauthorizedFeeder
 	}
 

@@ -1,6 +1,7 @@
 package piket_test
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -69,6 +70,47 @@ func TestAntiSpamRules(t *testing.T) {
 	}
 	if cfg.IsAdmin("6281234567@s.whatsapp.net", "6281234567") {
 		t.Errorf("random user should not be recognized as admin")
+	}
+}
+
+func TestFeederAssignmentCheck(t *testing.T) {
+	slot := piket.Slot{
+		ID: 1,
+		Members: []piket.Member{
+			{Name: "Budi", PhoneNumber: "6281111111", WhatsAppJID: "6281111111@s.whatsapp.net"},
+			{Name: "Fahad", PhoneNumber: "6282222222", WhatsAppJID: "31946050646097@lid"},
+		},
+	}
+
+	isFeeder := func(phone, jid string) bool {
+		cleanPhone := config.NormalizePhone(phone)
+		for _, m := range slot.Members {
+			cleanMPhone := config.NormalizePhone(m.PhoneNumber)
+			if cleanPhone != "" && cleanMPhone != "" && cleanMPhone == cleanPhone {
+				return true
+			}
+			cleanMJID := config.NormalizePhone(m.WhatsAppJID)
+			if cleanPhone != "" && cleanMJID != "" && cleanMJID == cleanPhone {
+				return true
+			}
+			if strings.Contains(jid, "@lid") {
+				lidUser := strings.Split(jid, "@")[0]
+				if strings.Contains(m.WhatsAppJID, lidUser) || strings.Contains(m.PhoneNumber, lidUser) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+
+	if !isFeeder("6281111111", "") {
+		t.Errorf("expected Budi to be recognized as feeder")
+	}
+	if !isFeeder("", "31946050646097@lid") {
+		t.Errorf("expected Fahad to be recognized via LID")
+	}
+	if isFeeder("6289999999", "6289999999@s.whatsapp.net") {
+		t.Errorf("unassigned user should not be recognized as feeder")
 	}
 }
 

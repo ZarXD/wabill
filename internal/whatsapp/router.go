@@ -996,7 +996,78 @@ func (r *Router) handlePiketPhoto(ctx context.Context, p *ParsedMessage) {
 	_ = r.waClient.SendText(ctx, p.ChatJID, reply)
 }
 
+func (r *Router) isTodayFeederOrAdmin(ctx context.Context, p *ParsedMessage) (bool, error) {
+	if r.isAdminSender(p) {
+		return true, nil
+	}
+
+	todayLog, todaySlot, err := r.piketService.GetTodaySlotAndLog(ctx, time.Now())
+	if err != nil {
+		return false, err
+	}
+
+	senderPhone := p.SenderPhone
+	if senderPhone == "" {
+		senderPhone = config.NormalizePhone(p.SenderJID)
+	}
+	cleanPhone := config.NormalizePhone(senderPhone)
+
+	// 1. Check against today's assigned slot members
+	if todaySlot != nil {
+		for _, m := range todaySlot.Members {
+			cleanMPhone := config.NormalizePhone(m.PhoneNumber)
+			if cleanPhone != "" && cleanMPhone != "" && cleanMPhone == cleanPhone {
+				return true, nil
+			}
+			cleanMJID := config.NormalizePhone(m.WhatsAppJID)
+			if cleanPhone != "" && cleanMJID != "" && cleanMJID == cleanPhone {
+				return true, nil
+			}
+			if p.SenderJID != "" && (m.WhatsAppJID == p.SenderJID || m.PhoneNumber == p.SenderJID) {
+				return true, nil
+			}
+			if p.SenderAltJID != "" && (m.WhatsAppJID == p.SenderAltJID || m.PhoneNumber == p.SenderAltJID) {
+				return true, nil
+			}
+			if strings.Contains(p.SenderJID, "@lid") {
+				lidUser := strings.Split(p.SenderJID, "@")[0]
+				if strings.Contains(m.WhatsAppJID, lidUser) || strings.Contains(m.PhoneNumber, lidUser) {
+					return true, nil
+				}
+			}
+		}
+	}
+
+	// 2. Check if today's log has an overridden display name that matches sender
+	if todayLog != nil && todayLog.AssignedMembersDisplay != "" {
+		disp := todayLog.AssignedMembersDisplay
+		if cleanPhone != "" && strings.Contains(disp, cleanPhone) {
+			return true, nil
+		}
+		if p.SenderPhone != "" && strings.Contains(disp, p.SenderPhone) {
+			return true, nil
+		}
+		if strings.Contains(p.SenderJID, "@lid") {
+			lidUser := strings.Split(p.SenderJID, "@")[0]
+			if strings.Contains(disp, lidUser) {
+				return true, nil
+			}
+		}
+	}
+
+	return false, nil
+}
+
 func (r *Router) handlePiketSudah(ctx context.Context, p *ParsedMessage) {
+	canConfirm, err := r.isTodayFeederOrAdmin(ctx, p)
+	if err != nil && !errors.Is(err, piket.ErrNoSlotsConfigured) {
+		log.Printf("[Piket] Error checking authorization: %v", err)
+	}
+	if !canConfirm {
+		_ = r.waClient.SendText(ctx, p.ChatJID, "⛔ Kamu bukan petugas piket hari ini bro. Hanya petugas piket hari ini atau admin yang dapat konfirmasi pakan lele.")
+		return
+	}
+
 	logRecord, slot, err := r.piketService.MarkDoneManually(ctx, p.SenderJID, p.SenderPhone, time.Now())
 	if err != nil {
 		if errors.Is(err, piket.ErrPiketAlreadyDone) {
@@ -1065,6 +1136,11 @@ func (r *Router) handlePiketStatus(ctx context.Context, p *ParsedMessage) {
 }
 
 func (r *Router) handlePiketTambah(ctx context.Context, p *ParsedMessage) {
+	if !r.isAdminSender(p) {
+		_ = r.waClient.SendText(ctx, p.ChatJID, "⛔ Hanya admin yang dapat menambah atau mengatur susunan slot piket.")
+		return
+	}
+
 	seen := make(map[string]bool)
 	var members []piket.Member
 
@@ -1180,6 +1256,11 @@ func (r *Router) handlePiketTambah(ctx context.Context, p *ParsedMessage) {
 }
 
 func (r *Router) handlePiketHapus(ctx context.Context, p *ParsedMessage) {
+	if !r.isAdminSender(p) {
+		_ = r.waClient.SendText(ctx, p.ChatJID, "⛔ Hanya admin yang dapat menghapus slot piket.")
+		return
+	}
+
 	if len(p.CommandArgs) == 0 && len(p.MentionedJIDs) == 0 {
 		_ = r.waClient.SendText(ctx, p.ChatJID, "Format: `/hapuspiket @Orang` atau `/hapuspiket <Nomor_Slot>`\nContoh: `/hapuspiket @Ari` atau `/hapuspiket 1`")
 		return
@@ -1200,6 +1281,11 @@ func (r *Router) handlePiketHapus(ctx context.Context, p *ParsedMessage) {
 }
 
 func (r *Router) handlePiketReset(ctx context.Context, p *ParsedMessage) {
+	if !r.isAdminSender(p) {
+		_ = r.waClient.SendText(ctx, p.ChatJID, "⛔ Hanya admin yang dapat mereset jadwal piket.")
+		return
+	}
+
 	err := r.piketService.ResetAllSlots(ctx)
 	if err != nil {
 		_ = r.waClient.SendText(ctx, p.ChatJID, fmt.Sprintf("Gagal reset piket: %v", err))
@@ -1209,6 +1295,15 @@ func (r *Router) handlePiketReset(ctx context.Context, p *ParsedMessage) {
 }
 
 func (r *Router) handlePiketGanti(ctx context.Context, p *ParsedMessage) {
+	canGanti, err := r.isTodayFeederOrAdmin(ctx, p)
+	if err != nil && !errors.Is(err, piket.ErrNoSlotsConfigured) {
+		log.Printf("[Piket] Error checking authorization: %v", err)
+	}
+	if !canGanti {
+		_ = r.waClient.SendText(ctx, p.ChatJID, "⛔ Hanya admin atau petugas piket hari ini yang dapat mengalihkan jadwal piket.")
+		return
+	}
+
 	seen := make(map[string]bool)
 	var mentionJIDs []string
 	var names []string
@@ -1281,7 +1376,7 @@ func (r *Router) handlePiketGanti(ctx context.Context, p *ParsedMessage) {
 	}
 
 	display := strings.Join(names, " & ")
-	err := r.piketService.SwapTodayPiket(ctx, time.Now(), display)
+	err = r.piketService.SwapTodayPiket(ctx, time.Now(), display)
 	if err != nil {
 		_ = r.waClient.SendText(ctx, p.ChatJID, fmt.Sprintf("Gagal mengganti piket: %v", err))
 		return
