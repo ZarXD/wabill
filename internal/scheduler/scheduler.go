@@ -169,16 +169,26 @@ func (s *Scheduler) checkPiketReminders() {
 
 	err := s.piketService.CheckAndSendReminders(ctx, time.Now(), func(reminderType string, slot *piket.Slot, logRecord *piket.Log) error {
 		var mentions []string
-		var displayNames []string
-		if slot != nil {
+		membersDisplay := ""
+		if logRecord != nil && logRecord.AssignedMembersDisplay != "" {
+			membersDisplay = logRecord.AssignedMembersDisplay
+			for _, part := range strings.Fields(membersDisplay) {
+				if strings.HasPrefix(part, "@") {
+					user := strings.TrimPrefix(part, "@")
+					jid := user + "@s.whatsapp.net"
+					if len(user) == 14 || len(user) == 15 {
+						jid = user + "@lid"
+					}
+					mentions = append(mentions, jid)
+				}
+			}
+		} else if slot != nil {
+			var displayNames []string
 			for _, m := range slot.Members {
 				mentions = append(mentions, m.WhatsAppJID)
 				displayNames = append(displayNames, "@"+m.PhoneNumber)
 			}
-		}
-		membersDisplay := strings.Join(displayNames, " & ")
-		if membersDisplay == "" {
-			membersDisplay = logRecord.AssignedMembersDisplay
+			membersDisplay = strings.Join(displayNames, " & ")
 		}
 
 		var msg string

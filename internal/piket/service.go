@@ -141,14 +141,14 @@ func (s *Service) ResetAllSlots(ctx context.Context) error {
 	return s.repo.ResetAllSlots(ctx)
 }
 
-// GetTodaySlotAndLog returns today's assigned slot and log (creates log if not yet created).
-func (s *Service) GetTodaySlotAndLog(ctx context.Context, now time.Time) (*Log, *Slot, error) {
+// GetSlotAndLogForDate returns the assigned slot and log for a given date (creates log if not yet created).
+func (s *Service) GetSlotAndLogForDate(ctx context.Context, targetDate time.Time) (*Log, *Slot, error) {
 	loc := s.cfg.AppTimezone
 	if loc == nil {
 		loc = time.Local
 	}
-	localNow := now.In(loc)
-	dateStr := localNow.Format("2006-01-02")
+	localTarget := targetDate.In(loc)
+	dateStr := localTarget.Format("2006-01-02")
 
 	slots, err := s.repo.ListActiveSlots(ctx)
 	if err != nil {
@@ -158,9 +158,7 @@ func (s *Service) GetTodaySlotAndLog(ctx context.Context, now time.Time) (*Log, 
 		return nil, nil, ErrNoSlotsConfigured
 	}
 
-	// Calculate deterministic daily rotation index
-	// Day offset since unix epoch in local timezone
-	dayCount := int(localNow.Unix() / 86400)
+	dayCount := int(localTarget.Unix() / 86400)
 	slotIndex := ((dayCount % len(slots)) + len(slots)) % len(slots)
 	assignedSlot := &slots[slotIndex]
 
@@ -170,10 +168,15 @@ func (s *Service) GetTodaySlotAndLog(ctx context.Context, now time.Time) (*Log, 
 	}
 
 	if logRecord == nil {
-		// Build assigned members display string
 		var names []string
 		for _, m := range assignedSlot.Members {
-			names = append(names, fmt.Sprintf("@%s (%s)", m.Name, m.PhoneNumber))
+			user := m.PhoneNumber
+			if m.WhatsAppJID != "" {
+				if parts := strings.Split(m.WhatsAppJID, "@"); len(parts) > 0 && parts[0] != "" {
+					user = parts[0]
+				}
+			}
+			names = append(names, "@"+user)
 		}
 		display := strings.Join(names, " & ")
 
@@ -184,7 +187,7 @@ func (s *Service) GetTodaySlotAndLog(ctx context.Context, now time.Time) (*Log, 
 			Status:                 StatusPending,
 		}
 		if err := s.repo.CreateLog(ctx, newLog); err != nil {
-			return nil, nil, fmt.Errorf("failed to create today piket log: %w", err)
+			return nil, nil, fmt.Errorf("failed to create piket log: %w", err)
 		}
 		logRecord = newLog
 	}
@@ -192,13 +195,18 @@ func (s *Service) GetTodaySlotAndLog(ctx context.Context, now time.Time) (*Log, 
 	return logRecord, assignedSlot, nil
 }
 
+func (s *Service) GetTodaySlotAndLog(ctx context.Context, now time.Time) (*Log, *Slot, error) {
+	return s.GetSlotAndLogForDate(ctx, now)
+}
+
 // GetWeeklySchedule returns the calculated roster for the next 7 days.
 type DaySchedule struct {
-	Date     string
-	DayName  string
-	SlotName string
-	Members  []Member
-	IsToday  bool
+	Date          string
+	DayName       string
+	SlotName      string
+	Members       []Member
+	CustomDisplay string
+	IsToday       bool
 }
 
 func (s *Service) GetWeeklySchedule(ctx context.Context, now time.Time) ([]DaySchedule, error) {
@@ -229,37 +237,50 @@ func (s *Service) GetWeeklySchedule(ctx context.Context, now time.Time) ([]DaySc
 	var schedule []DaySchedule
 	for i := 0; i < 7; i++ {
 		targetDate := localNow.AddDate(0, 0, i)
+		targetDateStr := targetDate.Format("2006-01-02")
 		dayCount := int(targetDate.Unix() / 86400)
 		slotIndex := ((dayCount % len(slots)) + len(slots)) % len(slots)
 		slot := slots[slotIndex]
 
+		customDisplay := ""
+		logRecord, _ := s.repo.GetLogByDate(ctx, targetDateStr)
+		if logRecord != nil && logRecord.AssignedMembersDisplay != "" {
+			customDisplay = logRecord.AssignedMembersDisplay
+		}
+
 		schedule = append(schedule, DaySchedule{
-			Date:     targetDate.Format("2006-01-02"),
-			DayName:  dayNames[targetDate.Weekday()],
-			SlotName: slot.Name,
-			Members:  slot.Members,
-			IsToday:  (i == 0),
+			Date:          targetDateStr,
+			DayName:       dayNames[targetDate.Weekday()],
+			SlotName:      slot.Name,
+			Members:       slot.Members,
+			CustomDisplay: customDisplay,
+			IsToday:       (i == 0),
 		})
 	}
 
 	return schedule, nil
 }
 
-// SwapTodayPiket overrides today's assigned members (for when someone is unavailable).
-func (s *Service) SwapTodayPiket(ctx context.Context, now time.Time, newDisplayName string) error {
+// SwapDatePiket overrides assigned members for a specific target date.
+func (s *Service) SwapDatePiket(ctx context.Context, targetTime time.Time, newDisplayName string) error {
 	loc := s.cfg.AppTimezone
 	if loc == nil {
 		loc = time.Local
 	}
-	dateStr := now.In(loc).Format("2006-01-02")
+	dateStr := targetTime.In(loc).Format("2006-01-02")
 
-	// Ensure today's log exists
-	_, _, err := s.GetTodaySlotAndLog(ctx, now)
+	// Ensure log exists for that date
+	_, _, err := s.GetSlotAndLogForDate(ctx, targetTime)
 	if err != nil {
 		return err
 	}
 
 	return s.repo.UpdateAssignedMembers(ctx, dateStr, newDisplayName)
+}
+
+// SwapTodayPiket overrides today's assigned members (for when someone is unavailable).
+func (s *Service) SwapTodayPiket(ctx context.Context, now time.Time, newDisplayName string) error {
+	return s.SwapDatePiket(ctx, now, newDisplayName)
 }
 
 // SubmitPhotoProof handles an incoming photo in the group and verifies anti-spam rules.

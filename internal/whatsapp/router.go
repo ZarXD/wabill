@@ -1143,19 +1143,41 @@ func (r *Router) handlePiketStatus(ctx context.Context, p *ParsedMessage) {
 	seenJID := make(map[string]bool)
 
 	for i, day := range schedule {
-		var memberNames []string
-		for _, m := range day.Members {
-			tag, jid := getMemberMentionTag(m)
-			memberNames = append(memberNames, tag)
-			if jid != "" && !seenJID[jid] {
-				seenJID[jid] = true
-				mentionJIDs = append(mentionJIDs, jid)
-			}
-		}
-		namesStr := strings.Join(memberNames, " & ")
+		namesStr := ""
 		slotType := "Solo"
-		if len(day.Members) > 1 {
-			slotType = "Duet 🛵"
+
+		if day.CustomDisplay != "" {
+			namesStr = day.CustomDisplay
+			if strings.Contains(namesStr, "&") {
+				slotType = "Duet 🛵"
+			}
+			for _, part := range strings.Fields(namesStr) {
+				if strings.HasPrefix(part, "@") {
+					user := strings.TrimPrefix(part, "@")
+					jid := user + "@s.whatsapp.net"
+					if len(user) == 14 || len(user) == 15 {
+						jid = user + "@lid"
+					}
+					if !seenJID[jid] {
+						seenJID[jid] = true
+						mentionJIDs = append(mentionJIDs, jid)
+					}
+				}
+			}
+		} else {
+			var memberNames []string
+			for _, m := range day.Members {
+				tag, jid := getMemberMentionTag(m)
+				memberNames = append(memberNames, tag)
+				if jid != "" && !seenJID[jid] {
+					seenJID[jid] = true
+					mentionJIDs = append(mentionJIDs, jid)
+				}
+			}
+			namesStr = strings.Join(memberNames, " & ")
+			if len(day.Members) > 1 {
+				slotType = "Duet 🛵"
+			}
 		}
 
 		if day.IsToday {
@@ -1343,6 +1365,21 @@ func (r *Router) handlePiketGanti(ctx context.Context, p *ParsedMessage) {
 		return
 	}
 
+	targetTime := time.Now()
+	dateLabel := "Hari Ini"
+
+	args := p.CommandArgs
+	if len(args) > 0 {
+		first := strings.ToLower(strings.TrimSpace(args[0]))
+		if first == "besok" || first == "tomorrow" {
+			targetTime = targetTime.AddDate(0, 0, 1)
+			dateLabel = "Besok"
+			args = args[1:]
+		} else if first == "hariini" || first == "today" {
+			args = args[1:]
+		}
+	}
+
 	seen := make(map[string]bool)
 	var mentionJIDs []string
 	var names []string
@@ -1368,7 +1405,7 @@ func (r *Router) handlePiketGanti(ctx context.Context, p *ParsedMessage) {
 		}
 	}
 
-	if len(p.CommandArgs) == 0 && len(p.MentionedJIDs) == 0 {
+	if len(args) == 0 && len(p.MentionedJIDs) == 0 {
 		addSender()
 	}
 
@@ -1392,8 +1429,8 @@ func (r *Router) handlePiketGanti(ctx context.Context, p *ParsedMessage) {
 		}
 	}
 
-	if len(p.CommandArgs) > 0 {
-		for _, arg := range p.CommandArgs {
+	if len(args) > 0 {
+		for _, arg := range args {
 			lower := strings.ToLower(strings.TrimSpace(arg))
 			switch lower {
 			case "saya", "gw", "gue", "aku", "me", "gua", "diriku", "ane", "self":
@@ -1410,18 +1447,18 @@ func (r *Router) handlePiketGanti(ctx context.Context, p *ParsedMessage) {
 	}
 
 	if len(names) == 0 {
-		_ = r.waClient.SendText(ctx, p.ChatJID, "Format salah. Tag orang yang menggantikan:\nContoh: `/gantipiket @Joko` atau `/gantipiket @Joko @Iwan`")
+		_ = r.waClient.SendText(ctx, p.ChatJID, "Format salah. Contoh:\n• `/gantipiket @Joko` (ganti petugas hari ini)\n• `/gantipiket besok @Joko` (ganti petugas besok)")
 		return
 	}
 
 	display := strings.Join(names, " & ")
-	err = r.piketService.SwapTodayPiket(ctx, time.Now(), display)
+	err = r.piketService.SwapDatePiket(ctx, targetTime, display)
 	if err != nil {
 		_ = r.waClient.SendText(ctx, p.ChatJID, fmt.Sprintf("Gagal mengganti piket: %v", err))
 		return
 	}
 
-	reply := fmt.Sprintf("🔄 *Piket Hari Ini Berhasil Dialihkan!*\n\nPetugas hari ini sekarang: %s\nSiap-siap meluncur jam 16:30 WIB ya bro! 🛵", display)
+	reply := fmt.Sprintf("🔄 *Piket %s Berhasil Dialihkan!*\n\nPetugas %s sekarang: %s\nSiap-siap meluncur jam 16:30 WIB ya bro! 🛵", dateLabel, strings.ToLower(dateLabel), display)
 	_ = r.waClient.SendTextWithMentions(ctx, p.ChatJID, reply, mentionJIDs)
 }
 
