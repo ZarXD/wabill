@@ -132,12 +132,20 @@ func (r *Router) processMessageEvent(msgEvt *events.Message) {
 		return
 	}
 
+	isPiketCmd := isPiketCommand(parsed.Command)
 	isPiketGroup := r.isLeleGroup(parsed)
+
+	// Auto-detect group: If LELE_GROUP_JID is not configured yet but piket commands are used in a group:
+	if parsed.IsGroup && r.cfg.LeleGroupJID == "" && isPiketCmd {
+		r.cfg.LeleGroupJID = parsed.ChatJID
+		isPiketGroup = true
+		log.Printf("[Router] Auto-configured LELE_GROUP_JID=%s from group command %s", parsed.ChatJID, parsed.Command)
+	}
 
 	// 3. Customer Whitelist: ONLY respond if sender is an Admin, from Lele Group, or Registered Subscriber!
 	// Non-registered numbers (friends, family, casual personal chats) are SILENTLY IGNORED.
 	isAdmin := r.isAdminSender(parsed)
-	if !isAdmin && !isPiketGroup {
+	if !isAdmin && !isPiketGroup && !isPiketCmd {
 		sub, err := r.billingService.IsRegisteredSubscriber(ctx, parsed.SenderJID, parsed.SenderPhone)
 		if err != nil || sub == nil {
 			log.Printf("[Router] Ignored message from unregistered sender Sender=%s (Phone=%s)", parsed.SenderJID, parsed.SenderPhone)
@@ -148,8 +156,8 @@ func (r *Router) processMessageEvent(msgEvt *events.Message) {
 	// 4. Mark as read immediately for authorized senders (Centang biru)
 	_ = r.waClient.MarkRead(ctx, msgEvt.Info.Chat, msgEvt.Info.Sender, []types.MessageID{msgEvt.Info.ID}, msgEvt.Info.Timestamp)
 
-	// Route to Piket Lele handler if message is from the configured lele group
-	if isPiketGroup {
+	// Route to Piket Lele handler if message is from the configured lele group or running a piket command in group
+	if isPiketGroup || (parsed.IsGroup && isPiketCmd) {
 		r.handleLeleGroupMessage(ctx, parsed)
 		return
 	}
@@ -264,6 +272,18 @@ func (r *Router) handleCommand(ctx context.Context, p *ParsedMessage) {
 		r.handleAdminMenu(ctx, p)
 	case CmdAdminActivateMember:
 		r.handleAdminActivateMember(ctx, p)
+	case CmdPiket:
+		r.handlePiketStatus(ctx, p)
+	case CmdListPiket:
+		r.handlePiketList(ctx, p)
+	case CmdTambahPiket:
+		r.handlePiketTambah(ctx, p)
+	case CmdGantiPiket:
+		r.handlePiketGanti(ctx, p)
+	case CmdHapusPiket:
+		r.handlePiketHapus(ctx, p)
+	case CmdSudahPakan:
+		r.handlePiketSudah(ctx, p)
 	default:
 		// Ignore unrelated chat messages to avoid spamming the user
 	}
@@ -891,6 +911,15 @@ func isExplicitBotCommand(p *ParsedMessage) bool {
 	return false
 }
 
+// isPiketCommand checks if the command is a piket lele related command.
+func isPiketCommand(cmd CommandType) bool {
+	switch cmd {
+	case CmdPiket, CmdTambahPiket, CmdHapusPiket, CmdGantiPiket, CmdListPiket, CmdSudahPakan:
+		return true
+	}
+	return false
+}
+
 // Piket Lele (Catfish Feeding Roster) Handlers
 
 func (r *Router) isLeleGroup(p *ParsedMessage) bool {
@@ -1036,13 +1065,16 @@ func (r *Router) handlePiketTambah(ctx context.Context, p *ParsedMessage) {
 
 	if len(p.MentionedJIDs) > 0 {
 		for _, jid := range p.MentionedJIDs {
-			phone := config.NormalizePhone(jid)
-			name := phone
-			if len(phone) > 4 {
-				name = "62" + phone[2:]
+			user := jid
+			if atIdx := strings.Index(jid, "@"); atIdx != -1 {
+				user = jid[:atIdx]
+			}
+			phone := config.NormalizePhone(user)
+			if phone == "" {
+				phone = user
 			}
 			members = append(members, piket.Member{
-				Name:        name,
+				Name:        phone,
 				PhoneNumber: phone,
 				WhatsAppJID: jid,
 			})
@@ -1117,7 +1149,14 @@ func (r *Router) handlePiketGanti(ctx context.Context, p *ParsedMessage) {
 
 	if len(p.MentionedJIDs) > 0 {
 		for _, jid := range p.MentionedJIDs {
-			phone := config.NormalizePhone(jid)
+			user := jid
+			if atIdx := strings.Index(jid, "@"); atIdx != -1 {
+				user = jid[:atIdx]
+			}
+			phone := config.NormalizePhone(user)
+			if phone == "" {
+				phone = user
+			}
 			mentionJIDs = append(mentionJIDs, jid)
 			names = append(names, "@"+phone)
 		}
