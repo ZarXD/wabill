@@ -1017,6 +1017,11 @@ func (r *Router) isTodayFeederOrAdmin(ctx context.Context, p *ParsedMessage) (bo
 		return false, err
 	}
 
+	// 0. If Sunday (Piket Bersama / Datang Semua), any group member or admin can confirm!
+	if todaySlot == nil && (todayLog != nil && strings.Contains(todayLog.AssignedMembersDisplay, "Piket Bersama")) {
+		return true, nil
+	}
+
 	senderPhone := p.SenderPhone
 	if senderPhone == "" {
 		senderPhone = config.NormalizePhone(p.SenderJID)
@@ -1143,6 +1148,15 @@ func (r *Router) handlePiketStatus(ctx context.Context, p *ParsedMessage) {
 	seenJID := make(map[string]bool)
 
 	for i, day := range schedule {
+		if day.IsSunday {
+			if day.IsToday {
+				sb.WriteString(fmt.Sprintf("👉 *%d. %s (%s) — HARI INI*\n   👥 *Piket Bersama:* Datang Semua 🐟✨\n\n", i+1, day.DayName, day.Date))
+			} else {
+				sb.WriteString(fmt.Sprintf("   *%d. %s* (%s)\n   👥 *Piket Bersama:* Datang Semua 🐟✨\n\n", i+1, day.DayName, day.Date))
+			}
+			continue
+		}
+
 		namesStr := ""
 		slotType := "Solo"
 
@@ -1380,6 +1394,16 @@ func (r *Router) handlePiketGanti(ctx context.Context, p *ParsedMessage) {
 		}
 	}
 
+	loc := r.cfg.AppTimezone
+	if loc == nil {
+		loc = time.Local
+	}
+	if targetTime.In(loc).Weekday() == time.Sunday {
+		reply := fmt.Sprintf("ℹ️ *Hari %s adalah jadwal Piket Bersama (Datang Semua)!*\n\nTidak ada giliran slot individu di hari Minggu, jadi tidak perlu dialihkan ya bro. Yuk merapat bareng-bareng ke kolam jam 16:30 WIB 🐟✨", dateLabel)
+		_ = r.waClient.SendText(ctx, p.ChatJID, reply)
+		return
+	}
+
 	seen := make(map[string]bool)
 	var mentionJIDs []string
 	var names []string
@@ -1496,7 +1520,8 @@ func (r *Router) handlePiketList(ctx context.Context, p *ParsedMessage) {
 
 	sb.WriteString("━━━━━━━━━━━━━━━━━━━━\n")
 	sb.WriteString("💡 *Info Giliran:*\n")
-	sb.WriteString("• Urutan giliran berputar tiap hari: Slot #1 ➔ Slot #2 ➔ dst.\n")
+	sb.WriteString("• Giliran berjalan Senin s/d Sabtu: Slot #1 ➔ Slot #2 ➔ dst.\n")
+	sb.WriteString("• Hari Minggu: Piket Bersama (datang semua barengan 🐟✨).\n")
 	sb.WriteString("• Hapus slot: `/hapuspiket <Nomor_Slot>` (contoh: `/hapuspiket 1`)\n")
 	sb.WriteString("• Tambah slot: `/tambahpiket @Orang` (atau `/tambahpiket saya`)")
 

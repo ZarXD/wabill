@@ -517,6 +517,35 @@ Segera meluncur ke kolam bro sebelum lele kanibal dan saling gigit! 🐟💥`,
 	)
 }
 
+func TemplatePiketSundayEarlyReminder(feedingTime string, loc *time.Location) string {
+	return fmt.Sprintf(
+`🔔 *PENGINGAT PIKET BERSAMA HARI MINGGU!*
+
+📅 Hari Ini: *Minggu*
+👥 Petugas: *Semua Anggota (Piket Bersama 🐟✨)*
+⏰ Waktu Kumpul/Pakan: *%s WIB*
+
+Hari Minggu jadwalnya kumpul dan pakan bareng ya bro! Kalau bisa mah dateng semua ke kolam biar rame-rame. 🛵💨
+Nanti setelah selesai, kirim foto kolam barengan atau ketik *sudah*.`,
+		feedingTime,
+	)
+}
+
+func TemplatePiketSundayFeedingReminder() string {
+	return `⏰ *WAKTUNYA PAKAN LELE BARENG!*
+
+Halo semuanya! Waktunya meluncur ke kolam bareng-bareng sore ini! 🛵🐟
+Yuk yang sempat hadir merapat ke kolam pakan lele bareng.
+Setelah beres, kirim foto barengan di kolam atau ketik *sudah*.`
+}
+
+func TemplatePiketSundayOverdueReminder() string {
+	return `⚠️ *PERINGATAN: LELE KELAPARAN!*
+
+Halo semuanya! Belum ada konfirmasi pakan lele sore ini! 😱
+Yuk yang lagi di dekat kolam tolong dicek dan diberi pakan sebelum lelenya kanibal dan saling gigit! 🐟💥`
+}
+
 func TemplatePiketSuccess(confirmedBy string, fedAt time.Time, loc *time.Location) string {
 	return fmt.Sprintf(
 `✅ *MANTAP! PAKAN LELE SELESAI*

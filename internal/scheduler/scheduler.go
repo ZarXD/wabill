@@ -192,18 +192,36 @@ func (s *Scheduler) checkPiketReminders() {
 		}
 
 		var msg string
-		switch reminderType {
-		case "EARLY":
-			msg = whatsapp.TemplatePiketEarlyReminder(slot.Name, membersDisplay, s.cfg.LeleFeedingTime, s.cfg.AppTimezone)
-		case "FEEDING":
-			msg = whatsapp.TemplatePiketFeedingReminder(membersDisplay)
-		case "OVERDUE":
-			msg = whatsapp.TemplatePiketOverdueReminder(membersDisplay)
-		default:
-			return nil
+		isSunday := (slot == nil) || (logRecord != nil && strings.Contains(logRecord.AssignedMembersDisplay, "Piket Bersama"))
+		if isSunday {
+			switch reminderType {
+			case "EARLY":
+				msg = whatsapp.TemplatePiketSundayEarlyReminder(s.cfg.LeleFeedingTime, s.cfg.AppTimezone)
+			case "FEEDING":
+				msg = whatsapp.TemplatePiketSundayFeedingReminder()
+			case "OVERDUE":
+				msg = whatsapp.TemplatePiketSundayOverdueReminder()
+			default:
+				return nil
+			}
+		} else {
+			slotName := "Slot Piket"
+			if slot != nil {
+				slotName = slot.Name
+			}
+			switch reminderType {
+			case "EARLY":
+				msg = whatsapp.TemplatePiketEarlyReminder(slotName, membersDisplay, s.cfg.LeleFeedingTime, s.cfg.AppTimezone)
+			case "FEEDING":
+				msg = whatsapp.TemplatePiketFeedingReminder(membersDisplay)
+			case "OVERDUE":
+				msg = whatsapp.TemplatePiketOverdueReminder(membersDisplay)
+			default:
+				return nil
+			}
 		}
 
-		log.Printf("[Scheduler] Sending Piket Lele reminder (%s) to group %s for %s", reminderType, s.cfg.LeleGroupJID, membersDisplay)
+		log.Printf("[Scheduler] Sending Piket Lele reminder (%s) to group %s (Sunday=%v) for %s", reminderType, s.cfg.LeleGroupJID, isSunday, membersDisplay)
 		return s.waClient.SendTextWithMentions(ctx, s.cfg.LeleGroupJID, msg, mentions)
 	})
 

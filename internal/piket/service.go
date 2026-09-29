@@ -142,6 +142,50 @@ func (s *Service) ResetAllSlots(ctx context.Context) error {
 }
 
 // GetSlotAndLogForDate returns the assigned slot and log for a given date (creates log if not yet created).
+// CalculatePiketSlot computes the slot index for a given date, exempting Sundays.
+// On Sundays, it returns (true, 0).
+// On non-Sundays, rotation proceeds seamlessly (Monday resumes from Saturday's slot).
+func CalculatePiketSlot(targetDate time.Time, loc *time.Location, numSlots int) (bool, int) {
+	if numSlots <= 0 {
+		return false, 0
+	}
+	if loc == nil {
+		loc = time.Local
+	}
+	local := targetDate.In(loc)
+	if local.Weekday() == time.Sunday {
+		return true, 0
+	}
+
+	normalizedTarget := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, loc)
+	refDate := time.Date(2026, 9, 29, 0, 0, 0, 0, loc) // Anchor: Tuesday 2026-09-29 is slot index 0
+
+	var offset int
+	if normalizedTarget.Equal(refDate) {
+		offset = 0
+	} else if normalizedTarget.After(refDate) {
+		curr := refDate
+		for curr.Before(normalizedTarget) {
+			curr = curr.AddDate(0, 0, 1)
+			if curr.Weekday() != time.Sunday {
+				offset++
+			}
+		}
+	} else {
+		curr := refDate
+		for curr.After(normalizedTarget) {
+			if curr.Weekday() != time.Sunday {
+				offset--
+			}
+			curr = curr.AddDate(0, 0, -1)
+		}
+	}
+
+	slotIndex := ((offset % numSlots) + numSlots) % numSlots
+	return false, slotIndex
+}
+
+// GetSlotAndLogForDate returns the assigned slot and log for a given date (creates log if not yet created).
 func (s *Service) GetSlotAndLogForDate(ctx context.Context, targetDate time.Time) (*Log, *Slot, error) {
 	loc := s.cfg.AppTimezone
 	if loc == nil {
@@ -158,9 +202,12 @@ func (s *Service) GetSlotAndLogForDate(ctx context.Context, targetDate time.Time
 		return nil, nil, ErrNoSlotsConfigured
 	}
 
-	dayCount := int(localTarget.Unix() / 86400)
-	slotIndex := ((dayCount % len(slots)) + len(slots)) % len(slots)
-	assignedSlot := &slots[slotIndex]
+	isSunday, slotIndex := CalculatePiketSlot(targetDate, loc, len(slots))
+
+	var assignedSlot *Slot
+	if !isSunday {
+		assignedSlot = &slots[slotIndex]
+	}
 
 	logRecord, err := s.repo.GetLogByDate(ctx, dateStr)
 	if err != nil {
@@ -168,21 +215,26 @@ func (s *Service) GetSlotAndLogForDate(ctx context.Context, targetDate time.Time
 	}
 
 	if logRecord == nil {
-		var names []string
-		for _, m := range assignedSlot.Members {
-			user := m.PhoneNumber
-			if m.WhatsAppJID != "" {
-				if parts := strings.Split(m.WhatsAppJID, "@"); len(parts) > 0 && parts[0] != "" {
-					user = parts[0]
+		var slotID *int64
+		display := "Semua Anggota (Piket Bersama 🐟✨)"
+		if assignedSlot != nil {
+			slotID = &assignedSlot.ID
+			var names []string
+			for _, m := range assignedSlot.Members {
+				user := m.PhoneNumber
+				if m.WhatsAppJID != "" {
+					if parts := strings.Split(m.WhatsAppJID, "@"); len(parts) > 0 && parts[0] != "" {
+						user = parts[0]
+					}
 				}
+				names = append(names, "@"+user)
 			}
-			names = append(names, "@"+user)
+			display = strings.Join(names, " & ")
 		}
-		display := strings.Join(names, " & ")
 
 		newLog := &Log{
 			FeedingDate:            dateStr,
-			SlotID:                 &assignedSlot.ID,
+			SlotID:                 slotID,
 			AssignedMembersDisplay: display,
 			Status:                 StatusPending,
 		}
@@ -190,6 +242,11 @@ func (s *Service) GetSlotAndLogForDate(ctx context.Context, targetDate time.Time
 			return nil, nil, fmt.Errorf("failed to create piket log: %w", err)
 		}
 		logRecord = newLog
+	} else if isSunday && logRecord.SlotID != nil {
+		// Healing: update previously generated Sunday log to Piket Bersama
+		logRecord.SlotID = nil
+		logRecord.AssignedMembersDisplay = "Semua Anggota (Piket Bersama 🐟✨)"
+		_ = s.repo.UpdateAssignedMembers(ctx, dateStr, logRecord.AssignedMembersDisplay)
 	}
 
 	return logRecord, assignedSlot, nil
@@ -207,6 +264,7 @@ type DaySchedule struct {
 	Members       []Member
 	CustomDisplay string
 	IsToday       bool
+	IsSunday      bool
 }
 
 func (s *Service) GetWeeklySchedule(ctx context.Context, now time.Time) ([]DaySchedule, error) {
@@ -238,9 +296,17 @@ func (s *Service) GetWeeklySchedule(ctx context.Context, now time.Time) ([]DaySc
 	for i := 0; i < 7; i++ {
 		targetDate := localNow.AddDate(0, 0, i)
 		targetDateStr := targetDate.Format("2006-01-02")
-		dayCount := int(targetDate.Unix() / 86400)
-		slotIndex := ((dayCount % len(slots)) + len(slots)) % len(slots)
-		slot := slots[slotIndex]
+		isSunday, slotIndex := CalculatePiketSlot(targetDate, loc, len(slots))
+
+		var slotName string
+		var members []Member
+		if isSunday {
+			slotName = "Piket Bersama"
+		} else {
+			slot := slots[slotIndex]
+			slotName = slot.Name
+			members = slot.Members
+		}
 
 		customDisplay := ""
 		logRecord, _ := s.repo.GetLogByDate(ctx, targetDateStr)
@@ -251,10 +317,11 @@ func (s *Service) GetWeeklySchedule(ctx context.Context, now time.Time) ([]DaySc
 		schedule = append(schedule, DaySchedule{
 			Date:          targetDateStr,
 			DayName:       dayNames[targetDate.Weekday()],
-			SlotName:      slot.Name,
-			Members:       slot.Members,
+			SlotName:      slotName,
+			Members:       members,
 			CustomDisplay: customDisplay,
 			IsToday:       (i == 0),
+			IsSunday:      isSunday,
 		})
 	}
 
@@ -334,13 +401,17 @@ func (s *Service) SubmitPhotoProof(
 	}
 
 	if !isAssigned && logRecord != nil && logRecord.AssignedMembersDisplay != "" {
-		if cleanSenderPhone != "" && strings.Contains(logRecord.AssignedMembersDisplay, cleanSenderPhone) {
+		if strings.Contains(logRecord.AssignedMembersDisplay, "Piket Bersama") {
 			isAssigned = true
-		}
-		if strings.Contains(senderJID, "@lid") {
-			lidUser := strings.Split(senderJID, "@")[0]
-			if strings.Contains(logRecord.AssignedMembersDisplay, lidUser) {
+		} else {
+			if cleanSenderPhone != "" && strings.Contains(logRecord.AssignedMembersDisplay, cleanSenderPhone) {
 				isAssigned = true
+			}
+			if strings.Contains(senderJID, "@lid") {
+				lidUser := strings.Split(senderJID, "@")[0]
+				if strings.Contains(logRecord.AssignedMembersDisplay, lidUser) {
+					isAssigned = true
+				}
 			}
 		}
 	}
