@@ -368,6 +368,10 @@ func (r *Router) handleRiwayat(ctx context.Context, p *ParsedMessage) {
 }
 
 func (r *Router) handleMenu(ctx context.Context, p *ParsedMessage) {
+	if r.isLeleGroup(p) {
+		r.handlePiketMenu(ctx, p)
+		return
+	}
 	isAdmin := r.isAdminSender(p)
 	msg := TemplateMenu(isAdmin)
 	buttons := []ButtonOption{
@@ -732,6 +736,11 @@ func (r *Router) handleAdminSetExpiry(ctx context.Context, p *ParsedMessage) {
 // Live Support Handlers
 
 func (r *Router) handleStartSupport(ctx context.Context, p *ParsedMessage) {
+	if r.isLeleGroup(p) {
+		r.handlePiketMenu(ctx, p)
+		return
+	}
+
 	phone := p.SenderPhone
 	if phone == "" {
 		phone = p.SenderJID
@@ -916,7 +925,7 @@ func isExplicitBotCommand(p *ParsedMessage) bool {
 // isPiketCommand checks if the command is a piket lele related command.
 func isPiketCommand(cmd CommandType) bool {
 	switch cmd {
-	case CmdPiket, CmdTambahPiket, CmdHapusPiket, CmdGantiPiket, CmdListPiket, CmdSudahPakan:
+	case CmdPiket, CmdTambahPiket, CmdHapusPiket, CmdGantiPiket, CmdListPiket, CmdSudahPakan, CmdResetPiket, CmdPiketMenu:
 		return true
 	}
 	return false
@@ -963,6 +972,8 @@ func (r *Router) handleLeleGroupMessage(ctx context.Context, p *ParsedMessage) {
 		r.handlePiketList(ctx, p)
 	case CmdResetPiket:
 		r.handlePiketReset(ctx, p)
+	case CmdMenu, CmdSupport, CmdPiketMenu:
+		r.handlePiketMenu(ctx, p)
 	default:
 		// Normal casual conversations/memes in the group are SILENTLY IGNORED!
 	}
@@ -1090,6 +1101,20 @@ func (r *Router) handlePiketSudah(ctx context.Context, p *ParsedMessage) {
 	_ = r.waClient.SendText(ctx, p.ChatJID, reply)
 }
 
+func getMemberMentionTag(m piket.Member) (tag string, jid string) {
+	jid = m.WhatsAppJID
+	user := m.PhoneNumber
+	if jid != "" {
+		if parts := strings.Split(jid, "@"); len(parts) > 0 && parts[0] != "" {
+			user = parts[0]
+		}
+	}
+	if user == "" {
+		user = m.Name
+	}
+	return "@" + user, jid
+}
+
 func (r *Router) handlePiketStatus(ctx context.Context, p *ParsedMessage) {
 	schedule, err := r.piketService.GetWeeklySchedule(ctx, time.Now())
 	if err != nil {
@@ -1102,37 +1127,48 @@ func (r *Router) handlePiketStatus(ctx context.Context, p *ParsedMessage) {
 	}
 
 	todayLog, _, _ := r.piketService.GetTodaySlotAndLog(ctx, time.Now())
-	statusStr := "⏳ Belum dikasih pakan"
+	statusStr := "⏳ *Belum dikasih pakan*"
 	if todayLog != nil && todayLog.Status == piket.StatusDone {
-		statusStr = "✅ Sudah dikasih pakan (Selesai)"
+		statusStr = "✅ *Sudah dikasih pakan (Selesai)*"
 	}
 
 	var sb strings.Builder
-	sb.WriteString("🐟 *JADWAL PIKET PAKAN LELE*\n\n")
-	sb.WriteString(fmt.Sprintf("Status Hari Ini: *%s*\n\n", statusStr))
-	sb.WriteString("📅 *Roster 7 Hari ke Depan:*\n")
+	sb.WriteString("🐟 *JADWAL PIKET PAKAN LELE*\n")
+	sb.WriteString("━━━━━━━━━━━━━━━━━━━━\n")
+	sb.WriteString(fmt.Sprintf("Status Hari Ini: %s\n", statusStr))
+	sb.WriteString("━━━━━━━━━━━━━━━━━━━━\n\n")
+	sb.WriteString("📅 *Roster 7 Hari ke Depan:*\n\n")
+
+	var mentionJIDs []string
+	seenJID := make(map[string]bool)
 
 	for i, day := range schedule {
-		prefix := "  "
-		tag := ""
-		if day.IsToday {
-			prefix = "👉"
-			tag = " *(HARI INI)*"
-		}
 		var memberNames []string
 		for _, m := range day.Members {
-			memberNames = append(memberNames, "@"+m.Name)
+			tag, jid := getMemberMentionTag(m)
+			memberNames = append(memberNames, tag)
+			if jid != "" && !seenJID[jid] {
+				seenJID[jid] = true
+				mentionJIDs = append(mentionJIDs, jid)
+			}
 		}
 		namesStr := strings.Join(memberNames, " & ")
+		slotType := "Solo"
 		if len(day.Members) > 1 {
-			namesStr += " (Duet 🛵)"
+			slotType = "Duet 🛵"
 		}
 
-		sb.WriteString(fmt.Sprintf("%s %d. *%s* (%s): %s%s\n", prefix, i+1, day.DayName, day.Date, namesStr, tag))
+		if day.IsToday {
+			sb.WriteString(fmt.Sprintf("👉 *%d. %s (%s) — HARI INI*\n   👥 Petugas: %s (%s)\n\n", i+1, day.DayName, day.Date, namesStr, slotType))
+		} else {
+			sb.WriteString(fmt.Sprintf("   *%d. %s* (%s)\n   👥 Petugas: %s (%s)\n\n", i+1, day.DayName, day.Date, namesStr, slotType))
+		}
 	}
 
-	sb.WriteString("\nKetik *sudah* atau kirim foto kolam jika sudah kasih pakan.")
-	_ = r.waClient.SendText(ctx, p.ChatJID, strings.TrimSpace(sb.String()))
+	sb.WriteString("━━━━━━━━━━━━━━━━━━━━\n")
+	sb.WriteString("Ketik *sudah* atau kirim foto kolam jika sudah memberi pakan.")
+
+	_ = r.waClient.SendTextWithMentions(ctx, p.ChatJID, strings.TrimSpace(sb.String()), mentionJIDs)
 }
 
 func (r *Router) handlePiketTambah(ctx context.Context, p *ParsedMessage) {
@@ -1389,12 +1425,17 @@ func (r *Router) handlePiketGanti(ctx context.Context, p *ParsedMessage) {
 func (r *Router) handlePiketList(ctx context.Context, p *ParsedMessage) {
 	slots, err := r.piketService.ListSlots(ctx)
 	if err != nil || len(slots) == 0 {
-		_ = r.waClient.SendText(ctx, p.ChatJID, "Belum ada slot piket yang terdaftar. Ketik `/tambahpiket @User`.")
+		_ = r.waClient.SendText(ctx, p.ChatJID, "⚠️ Belum ada slot piket yang terdaftar. Ketik `/tambahpiket @User`.")
 		return
 	}
 
 	var sb strings.Builder
-	sb.WriteString("📋 *DAFTAR SLOT PIKET LELE:*\n\n")
+	sb.WriteString("📋 *DAFTAR GILIRAN PIKET LELE*\n")
+	sb.WriteString("━━━━━━━━━━━━━━━━━━━━\n\n")
+
+	var mentionJIDs []string
+	seenJID := make(map[string]bool)
+
 	for _, s := range slots {
 		slotType := "Solo"
 		if len(s.Members) > 1 {
@@ -1402,11 +1443,59 @@ func (r *Router) handlePiketList(ctx context.Context, p *ParsedMessage) {
 		}
 		var memberNames []string
 		for _, m := range s.Members {
-			memberNames = append(memberNames, "@"+m.PhoneNumber)
+			tag, jid := getMemberMentionTag(m)
+			memberNames = append(memberNames, tag)
+			if jid != "" && !seenJID[jid] {
+				seenJID[jid] = true
+				mentionJIDs = append(mentionJIDs, jid)
+			}
 		}
-		sb.WriteString(fmt.Sprintf("%d. Slot #%d (ID: %d - %s): %s\n", s.RotationOrder, s.RotationOrder, s.ID, slotType, strings.Join(memberNames, " & ")))
+
+		sb.WriteString(fmt.Sprintf("*Slot #%d* (%s)\n👥 Petugas: %s\n\n", s.RotationOrder, slotType, strings.Join(memberNames, " & ")))
 	}
-	sb.WriteString("\nUntuk menghapus: `/hapuspiket <Nomor_Slot>` atau `/hapuspiket @Orang`\nReset semua: `/resetpiket`")
+
+	sb.WriteString("━━━━━━━━━━━━━━━━━━━━\n")
+	sb.WriteString("💡 *Info Giliran:*\n")
+	sb.WriteString("• Urutan giliran berputar tiap hari: Slot #1 ➔ Slot #2 ➔ dst.\n")
+	sb.WriteString("• Hapus slot: `/hapuspiket <Nomor_Slot>` (contoh: `/hapuspiket 1`)\n")
+	sb.WriteString("• Tambah slot: `/tambahpiket @Orang` (atau `/tambahpiket saya`)")
+
+	_ = r.waClient.SendTextWithMentions(ctx, p.ChatJID, strings.TrimSpace(sb.String()), mentionJIDs)
+}
+
+func (r *Router) handlePiketMenu(ctx context.Context, p *ParsedMessage) {
+	isAdmin := r.isAdminSender(p)
+	var sb strings.Builder
+	sb.WriteString("🐟 *MENU BOT PIKET LELE* 🐟\n")
+	sb.WriteString("━━━━━━━━━━━━━━━━━━━━\n")
+	sb.WriteString("Halo! Berikut daftar perintah piket pakan lele di grup ini:\n\n")
+
+	sb.WriteString("📋 *Jadwal & Giliran:*\n")
+	sb.WriteString("• `/piket` — Cek petugas hari ini & roster 7 hari\n")
+	sb.WriteString("• `/listpiket` — Cek susunan semua slot giliran\n\n")
+
+	sb.WriteString("🛵 *Konfirmasi Pakan:*\n")
+	sb.WriteString("• `sudah` / `beres` — Konfirmasi lele sudah diberi pakan\n")
+	sb.WriteString("• Kirim Foto Kolam — Foto bukti pakan (hanya petugas hari ini/admin)\n\n")
+
+	sb.WriteString("🔄 *Tukar Giliran:*\n")
+	sb.WriteString("• `/gantipiket @Teman` — Alihkan tugas hari ini ke teman\n\n")
+
+	if isAdmin {
+		sb.WriteString("⚙️ *Pengaturan Admin:*\n")
+		sb.WriteString("• `/tambahpiket` — Daftarkan diri sendiri (Solo)\n")
+		sb.WriteString("• `/tambahpiket @Teman` — Daftarkan teman (Solo)\n")
+		sb.WriteString("• `/tambahpiket saya @Teman` — Daftarkan slot Duet 🛵\n")
+		sb.WriteString("• `/hapuspiket <Nomor>` — Hapus slot piket (contoh: `/hapuspiket 1`)\n")
+		sb.WriteString("• `/resetpiket` — Kosongkan & reset semua jadwal piket\n\n")
+	}
+
+	sb.WriteString("━━━━━━━━━━━━━━━━━━━━\n")
+	sb.WriteString("⏰ *Jadwal Pengingat Bot:*\n")
+	sb.WriteString("• 15:00 WIB — Peringatan awal bersiap\n")
+	sb.WriteString("• 16:30 WIB — Waktunya pakan lele\n")
+	sb.WriteString("• 17:30 WIB — Alarm darurat jika belum ada yang pakan!")
+
 	_ = r.waClient.SendText(ctx, p.ChatJID, strings.TrimSpace(sb.String()))
 }
 

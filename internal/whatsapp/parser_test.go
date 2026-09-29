@@ -350,6 +350,8 @@ func TestPiketCommands(t *testing.T) {
 		{"Hapus Piket", "/hapuspiket 1", whatsapp.CmdHapusPiket},
 		{"Sudah Pakan 'sudah'", "sudah", whatsapp.CmdSudahPakan},
 		{"Sudah Pakan '/done'", "/done", whatsapp.CmdSudahPakan},
+		{"Reset Piket", "/resetpiket", whatsapp.CmdResetPiket},
+		{"Menu Piket", "/menupiket", whatsapp.CmdPiketMenu},
 	}
 
 	for _, tt := range piketTests {
