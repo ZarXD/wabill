@@ -1068,6 +1068,42 @@ func (r *Router) handlePiketTambah(ctx context.Context, p *ParsedMessage) {
 	seen := make(map[string]bool)
 	var members []piket.Member
 
+	// Helper to add sender themselves (for when user cannot tag their own account in WhatsApp)
+	senderPhone := p.SenderPhone
+	if senderPhone == "" {
+		senderPhone = config.NormalizePhone(p.SenderJID)
+	}
+	senderJID := p.SenderAltJID
+	if senderJID == "" {
+		senderJID = p.SenderJID
+	}
+	senderUser := senderPhone
+	if senderUser == "" {
+		senderUser = senderJID
+	}
+
+	addSender := func() {
+		if !seen[senderUser] && senderUser != "" {
+			seen[senderUser] = true
+			name := p.PushName
+			if name == "" {
+				name = senderPhone
+			}
+			members = append(members, piket.Member{
+				Name:        name,
+				PhoneNumber: senderPhone,
+				WhatsAppJID: senderJID,
+			})
+		}
+	}
+
+	// 1. If someone just types "/tambahpiket" with NO arguments and NO mentions:
+	// Automatically register the sender!
+	if len(p.CommandArgs) == 0 && len(p.MentionedJIDs) == 0 {
+		addSender()
+	}
+
+	// 2. Process tagged members
 	if len(p.MentionedJIDs) > 0 {
 		for _, jid := range p.MentionedJIDs {
 			user := jid
@@ -1089,22 +1125,31 @@ func (r *Router) handlePiketTambah(ctx context.Context, p *ParsedMessage) {
 				WhatsAppJID: jid,
 			})
 		}
-	} else if len(p.CommandArgs) > 0 {
+	}
+
+	// 3. Process args: check for self keywords ("saya", "gw", "aku", "me") or phone numbers
+	if len(p.CommandArgs) > 0 {
 		for _, arg := range p.CommandArgs {
-			cleanPhone := config.NormalizePhone(arg)
-			if cleanPhone != "" && !seen[cleanPhone] {
-				seen[cleanPhone] = true
-				members = append(members, piket.Member{
-					Name:        cleanPhone,
-					PhoneNumber: cleanPhone,
-					WhatsAppJID: cleanPhone + "@s.whatsapp.net",
-				})
+			lower := strings.ToLower(strings.TrimSpace(arg))
+			switch lower {
+			case "saya", "gw", "gue", "aku", "me", "gua", "diriku", "ane", "self":
+				addSender()
+			default:
+				cleanPhone := config.NormalizePhone(arg)
+				if cleanPhone != "" && !seen[cleanPhone] {
+					seen[cleanPhone] = true
+					members = append(members, piket.Member{
+						Name:        cleanPhone,
+						PhoneNumber: cleanPhone,
+						WhatsAppJID: cleanPhone + "@s.whatsapp.net",
+					})
+				}
 			}
 		}
 	}
 
 	if len(members) == 0 {
-		_ = r.waClient.SendText(ctx, p.ChatJID, "Format salah. Cukup tag orangnya ya le:\n\n*Solo (1 orang):*\n`/tambahpiket @Orang`\n\n*Duet (2 orang motoran):*\n`/tambahpiket @Orang1 @Orang2`")
+		_ = r.waClient.SendText(ctx, p.ChatJID, "Format salah. Kamu bisa gunakan:\n\n*Daftar Diri Sendiri (Solo):*\n`/tambahpiket saya` atau cukup ketik `/tambahpiket`\n\n*Daftar Orang Lain (Solo):*\n`/tambahpiket @Teman`\n\n*Duet (Barengan Kamu & Teman):*\n`/tambahpiket saya @Teman`\n\n*Duet (2 Teman):*\n`/tambahpiket @Teman1 @Teman2`")
 		return
 	}
 
@@ -1168,6 +1213,31 @@ func (r *Router) handlePiketGanti(ctx context.Context, p *ParsedMessage) {
 	var mentionJIDs []string
 	var names []string
 
+	senderPhone := p.SenderPhone
+	if senderPhone == "" {
+		senderPhone = config.NormalizePhone(p.SenderJID)
+	}
+	senderJID := p.SenderAltJID
+	if senderJID == "" {
+		senderJID = p.SenderJID
+	}
+	senderUser := senderPhone
+	if senderUser == "" {
+		senderUser = senderJID
+	}
+
+	addSender := func() {
+		if !seen[senderUser] && senderUser != "" {
+			seen[senderUser] = true
+			mentionJIDs = append(mentionJIDs, senderJID)
+			names = append(names, "@"+senderPhone)
+		}
+	}
+
+	if len(p.CommandArgs) == 0 && len(p.MentionedJIDs) == 0 {
+		addSender()
+	}
+
 	if len(p.MentionedJIDs) > 0 {
 		for _, jid := range p.MentionedJIDs {
 			user := jid
@@ -1186,13 +1256,21 @@ func (r *Router) handlePiketGanti(ctx context.Context, p *ParsedMessage) {
 			mentionJIDs = append(mentionJIDs, jid)
 			names = append(names, "@"+phone)
 		}
-	} else if len(p.CommandArgs) > 0 {
+	}
+
+	if len(p.CommandArgs) > 0 {
 		for _, arg := range p.CommandArgs {
-			clean := config.NormalizePhone(arg)
-			if clean != "" && !seen[clean] {
-				seen[clean] = true
-				mentionJIDs = append(mentionJIDs, clean+"@s.whatsapp.net")
-				names = append(names, "@"+clean)
+			lower := strings.ToLower(strings.TrimSpace(arg))
+			switch lower {
+			case "saya", "gw", "gue", "aku", "me", "gua", "diriku", "ane", "self":
+				addSender()
+			default:
+				clean := config.NormalizePhone(arg)
+				if clean != "" && !seen[clean] {
+					seen[clean] = true
+					mentionJIDs = append(mentionJIDs, clean+"@s.whatsapp.net")
+					names = append(names, "@"+clean)
+				}
 			}
 		}
 	}
@@ -1233,7 +1311,7 @@ func (r *Router) handlePiketList(ctx context.Context, p *ParsedMessage) {
 		}
 		sb.WriteString(fmt.Sprintf("%d. Slot #%d (ID: %d - %s): %s\n", s.RotationOrder, s.RotationOrder, s.ID, slotType, strings.Join(memberNames, " & ")))
 	}
-	sb.WriteString("\nUntuk menghapus slot: `/hapuspiket <ID>`")
+	sb.WriteString("\nUntuk menghapus: `/hapuspiket <Nomor_Slot>` atau `/hapuspiket @Orang`\nReset semua: `/resetpiket`")
 	_ = r.waClient.SendText(ctx, p.ChatJID, strings.TrimSpace(sb.String()))
 }
 
