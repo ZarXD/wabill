@@ -11,6 +11,7 @@ import (
 	"wabill/internal/billing"
 	"wabill/internal/config"
 	"wabill/internal/paymentprovider"
+	"wabill/internal/piket"
 	"wabill/internal/scheduler"
 	"wabill/internal/storage"
 	"wabill/internal/whatsapp"
@@ -53,10 +54,12 @@ func main() {
 	auditRepo := storage.NewAuditRepo(db)
 	dedupRepo := storage.NewDeduplicationRepo(db)
 
+	piketRepo := piket.NewRepo(db)
+
 	// 5. Initialize payment provider
 	provider := paymentprovider.NewManualTransferProvider(cfg)
 
-	// 6. Initialize billing domain service
+	// 6. Initialize domain services
 	billingSvc := billing.NewService(
 		cfg,
 		subRepo,
@@ -67,6 +70,7 @@ func main() {
 		auditRepo,
 		provider,
 	)
+	piketSvc := piket.NewService(cfg, piketRepo)
 
 	// 7. Initialize WhatsApp session & client
 	waCtx, waCancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -80,7 +84,7 @@ func main() {
 	waClient := whatsapp.NewWhatsmeowClient(sessionMgr.Client(), cfg)
 
 	// 8. Register message event router
-	router := whatsapp.NewRouter(cfg, billingSvc, waClient, dedupRepo)
+	router := whatsapp.NewRouter(cfg, billingSvc, piketSvc, waClient, dedupRepo)
 	sessionMgr.Client().AddEventHandler(router.HandleEvent)
 
 	// 9. Connect & Pair WhatsApp
@@ -90,7 +94,7 @@ func main() {
 	}
 
 	// 10. Start background scheduler
-	sched := scheduler.NewScheduler(cfg, billingSvc, waClient)
+	sched := scheduler.NewScheduler(cfg, billingSvc, piketSvc, waClient)
 	sched.Start()
 
 	log.Println("[Main] wabill is up and running! Press CTRL+C to exit.")

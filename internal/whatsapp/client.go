@@ -18,6 +18,7 @@ import (
 // WhatsAppClient provides an abstracted interface for sending messages and downloading media.
 type WhatsAppClient interface {
 	SendText(ctx context.Context, to string, text string) error
+	SendTextWithMentions(ctx context.Context, to string, text string, mentions []string) error
 	SendButtons(ctx context.Context, to string, text string, buttons []ButtonOption) error
 	SendList(ctx context.Context, to string, text string, footer string, buttonText string, sections []ListSection) error
 	SendImage(ctx context.Context, to string, imageData []byte, caption, mimeType string) error
@@ -53,6 +54,35 @@ func (w *WhatsmeowClient) SendText(ctx context.Context, to string, text string) 
 	_, err = w.cli.SendMessage(ctx, toJID, msg)
 	if err != nil {
 		return fmt.Errorf("failed to send text message: %w", err)
+	}
+	return nil
+}
+
+func (w *WhatsmeowClient) SendTextWithMentions(ctx context.Context, to string, text string, mentions []string) error {
+	toJID, err := types.ParseJID(to)
+	if err != nil {
+		return fmt.Errorf("invalid recipient JID: %w", err)
+	}
+
+	var msg *waE2E.Message
+	if len(mentions) > 0 {
+		msg = &waE2E.Message{
+			ExtendedTextMessage: &waE2E.ExtendedTextMessage{
+				Text: proto.String(text),
+				ContextInfo: &waE2E.ContextInfo{
+					MentionedJID: mentions,
+				},
+			},
+		}
+	} else {
+		msg = &waE2E.Message{
+			Conversation: proto.String(text),
+		}
+	}
+
+	_, err = w.cli.SendMessage(ctx, toJID, msg)
+	if err != nil {
+		return fmt.Errorf("failed to send text with mentions: %w", err)
 	}
 	return nil
 }

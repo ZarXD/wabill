@@ -3,18 +3,21 @@ package scheduler
 import (
 	"context"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
 	"wabill/internal/billing"
 	"wabill/internal/config"
 	"wabill/internal/domain"
+	"wabill/internal/piket"
 	"wabill/internal/whatsapp"
 )
 
 type Scheduler struct {
 	cfg            *config.Config
 	billingService *billing.Service
+	piketService   *piket.Service
 	waClient       whatsapp.WhatsAppClient
 	stopChan       chan struct{}
 	wg             sync.WaitGroup
@@ -23,22 +26,25 @@ type Scheduler struct {
 func NewScheduler(
 	cfg *config.Config,
 	billingSvc *billing.Service,
+	piketSvc *piket.Service,
 	waClient whatsapp.WhatsAppClient,
 ) *Scheduler {
 	return &Scheduler{
 		cfg:            cfg,
 		billingService: billingSvc,
+		piketService:   piketSvc,
 		waClient:       waClient,
 		stopChan:       make(chan struct{}),
 	}
 }
 
-// Start launches the background ticker loops for expiration and reminders.
+// Start launches the background ticker loops for expiration, billing reminders, and piket reminders.
 func (s *Scheduler) Start() {
-	s.wg.Add(2)
+	s.wg.Add(3)
 	go s.runExpirationWorker()
 	go s.runReminderWorker()
-	log.Println("[Scheduler] Background workers started (invoice expiration & billing reminders)")
+	go s.runPiketWorker()
+	log.Println("[Scheduler] Background workers started (invoice expiration, billing reminders & lele piket)")
 }
 
 // Stop gracefully signals background workers to stop and waits for completion.
@@ -124,3 +130,75 @@ func (s *Scheduler) checkReminders() {
 		log.Printf("[Scheduler] Error checking due reminders: %v", err)
 	}
 }
+
+func (s *Scheduler) runPiketWorker() {
+	defer s.wg.Done()
+
+	// Brief initial delay on startup
+	select {
+	case <-s.stopChan:
+		return
+	case <-time.After(10 * time.Second):
+		s.checkPiketReminders()
+	}
+
+	// Check every 30 seconds for accurate minute matching
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-s.stopChan:
+			return
+		case <-ticker.C:
+			s.checkPiketReminders()
+		}
+	}
+}
+
+func (s *Scheduler) checkPiketReminders() {
+	if s.piketService == nil || s.cfg.LeleGroupJID == "" {
+		return
+	}
+	if !s.waClient.IsConnected() {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	err := s.piketService.CheckAndSendReminders(ctx, time.Now(), func(reminderType string, slot *piket.Slot, logRecord *piket.Log) error {
+		var mentions []string
+		var displayNames []string
+		if slot != nil {
+			for _, m := range slot.Members {
+				mentions = append(mentions, m.WhatsAppJID)
+				displayNames = append(displayNames, "@"+m.PhoneNumber)
+			}
+		}
+		membersDisplay := strings.Join(displayNames, " & ")
+		if membersDisplay == "" {
+			membersDisplay = logRecord.AssignedMembersDisplay
+		}
+
+		var msg string
+		switch reminderType {
+		case "EARLY":
+			msg = whatsapp.TemplatePiketEarlyReminder(slot.Name, membersDisplay, s.cfg.LeleFeedingTime, s.cfg.AppTimezone)
+		case "FEEDING":
+			msg = whatsapp.TemplatePiketFeedingReminder(membersDisplay)
+		case "OVERDUE":
+			msg = whatsapp.TemplatePiketOverdueReminder(membersDisplay)
+		default:
+			return nil
+		}
+
+		log.Printf("[Scheduler] Sending Piket Lele reminder (%s) to group %s for %s", reminderType, s.cfg.LeleGroupJID, membersDisplay)
+		return s.waClient.SendTextWithMentions(ctx, s.cfg.LeleGroupJID, msg, mentions)
+	})
+
+	if err != nil {
+		log.Printf("[Scheduler] Error checking piket reminders: %v", err)
+	}
+}
+

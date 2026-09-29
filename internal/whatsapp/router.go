@@ -15,12 +15,14 @@ import (
 	"wabill/internal/billing"
 	"wabill/internal/config"
 	"wabill/internal/domain"
+	"wabill/internal/piket"
 	"wabill/internal/storage"
 )
 
 type Router struct {
 	cfg            *config.Config
 	billingService *billing.Service
+	piketService   *piket.Service
 	waClient       WhatsAppClient
 	dedupRepo      *storage.DeduplicationRepo
 	limiter        *UserRateLimiter
@@ -31,6 +33,7 @@ type Router struct {
 func NewRouter(
 	cfg *config.Config,
 	billingSvc *billing.Service,
+	piketSvc *piket.Service,
 	waClient WhatsAppClient,
 	dedupRepo *storage.DeduplicationRepo,
 ) *Router {
@@ -38,6 +41,7 @@ func NewRouter(
 	r := &Router{
 		cfg:            cfg,
 		billingService: billingSvc,
+		piketService:   piketSvc,
 		waClient:       waClient,
 		dedupRepo:      dedupRepo,
 		limiter: NewUserRateLimiter(RateLimiterConfig{
@@ -121,10 +125,19 @@ func (r *Router) processMessageEvent(msgEvt *events.Message) {
 		return
 	}
 
-	// 3. Customer Whitelist: ONLY respond if sender is an Admin OR an Active Registered Subscriber!
+	// Fast-path: /jid or /cekid command (works anywhere to help configure LELE_GROUP_JID)
+	if parsed.Command == CmdJID {
+		reply := fmt.Sprintf("🆔 *ID Chat / Grup Ini:*\n`%s`\n\nUntuk menjadikan grup ini sebagai grup piket lele, tambahkan di file `.env`:\n`LELE_GROUP_JID=%s`", parsed.ChatJID, parsed.ChatJID)
+		_ = r.waClient.SendText(ctx, parsed.ChatJID, reply)
+		return
+	}
+
+	isPiketGroup := r.isLeleGroup(parsed)
+
+	// 3. Customer Whitelist: ONLY respond if sender is an Admin, from Lele Group, or Registered Subscriber!
 	// Non-registered numbers (friends, family, casual personal chats) are SILENTLY IGNORED.
 	isAdmin := r.isAdminSender(parsed)
-	if !isAdmin {
+	if !isAdmin && !isPiketGroup {
 		sub, err := r.billingService.IsRegisteredSubscriber(ctx, parsed.SenderJID, parsed.SenderPhone)
 		if err != nil || sub == nil {
 			log.Printf("[Router] Ignored message from unregistered sender Sender=%s (Phone=%s)", parsed.SenderJID, parsed.SenderPhone)
@@ -134,6 +147,12 @@ func (r *Router) processMessageEvent(msgEvt *events.Message) {
 
 	// 4. Mark as read immediately for authorized senders (Centang biru)
 	_ = r.waClient.MarkRead(ctx, msgEvt.Info.Chat, msgEvt.Info.Sender, []types.MessageID{msgEvt.Info.ID}, msgEvt.Info.Timestamp)
+
+	// Route to Piket Lele handler if message is from the configured lele group
+	if isPiketGroup {
+		r.handleLeleGroupMessage(ctx, parsed)
+		return
+	}
 
 	// 5. Rate limiting / Anti-spam check (skip for authorized admins)
 	if !isAdmin {
@@ -871,3 +890,284 @@ func isExplicitBotCommand(p *ParsedMessage) bool {
 	}
 	return false
 }
+
+// Piket Lele (Catfish Feeding Roster) Handlers
+
+func (r *Router) isLeleGroup(p *ParsedMessage) bool {
+	if r.cfg.LeleGroupJID == "" || !p.IsGroup {
+		return false
+	}
+	cleanGroupConfig := config.NormalizePhone(r.cfg.LeleGroupJID)
+	cleanChat := config.NormalizePhone(p.ChatJID)
+	if cleanGroupConfig != "" && cleanGroupConfig == cleanChat {
+		return true
+	}
+	return strings.EqualFold(strings.TrimSpace(p.ChatJID), strings.TrimSpace(r.cfg.LeleGroupJID))
+}
+
+func (r *Router) handleLeleGroupMessage(ctx context.Context, p *ParsedMessage) {
+	if r.piketService == nil {
+		return
+	}
+
+	// 1. Photo handling with anti-spam
+	if p.ImageMessage != nil {
+		r.handlePiketPhoto(ctx, p)
+		return
+	}
+
+	// 2. Command handling
+	switch p.Command {
+	case CmdSudahPakan:
+		r.handlePiketSudah(ctx, p)
+	case CmdPiket:
+		r.handlePiketStatus(ctx, p)
+	case CmdTambahPiket:
+		r.handlePiketTambah(ctx, p)
+	case CmdHapusPiket:
+		r.handlePiketHapus(ctx, p)
+	case CmdGantiPiket:
+		r.handlePiketGanti(ctx, p)
+	case CmdListPiket:
+		r.handlePiketList(ctx, p)
+	default:
+		// Normal casual conversations/memes in the group are SILENTLY IGNORED!
+	}
+}
+
+func (r *Router) handlePiketPhoto(ctx context.Context, p *ParsedMessage) {
+	imgBytes, err := r.waClient.DownloadImage(ctx, p.ImageMessage)
+	if err != nil {
+		log.Printf("[Piket] Failed to download group photo: %v", err)
+		return
+	}
+
+	logRecord, slot, err := r.piketService.SubmitPhotoProof(ctx, p.SenderJID, p.SenderPhone, p.RawText, imgBytes, time.Now())
+	if err != nil {
+		if errors.Is(err, piket.ErrPiketAlreadyDone) || errors.Is(err, piket.ErrUnauthorizedFeeder) {
+			// Anti-spam: Silently ignore photos sent by other members or when already done
+			log.Printf("[Piket Anti-Spam] Ignored photo from %s: %v", p.SenderPhone, err)
+			return
+		}
+		log.Printf("[Piket] Photo proof error: %v", err)
+		return
+	}
+
+	name := p.PushName
+	if name == "" {
+		name = p.SenderPhone
+	}
+	_ = slot
+
+	reply := TemplatePiketSuccess(name, *logRecord.FedAt, r.cfg.AppTimezone)
+	_ = r.waClient.SendText(ctx, p.ChatJID, reply)
+}
+
+func (r *Router) handlePiketSudah(ctx context.Context, p *ParsedMessage) {
+	logRecord, slot, err := r.piketService.MarkDoneManually(ctx, p.SenderJID, p.SenderPhone, time.Now())
+	if err != nil {
+		if errors.Is(err, piket.ErrPiketAlreadyDone) {
+			_ = r.waClient.SendText(ctx, p.ChatJID, "ℹ️ Piket lele hari ini sudah tercatat selesai sebelumnya ya bro 👍")
+			return
+		}
+		if errors.Is(err, piket.ErrNoSlotsConfigured) {
+			_ = r.waClient.SendText(ctx, p.ChatJID, "⚠️ Belum ada jadwal piket yang terdaftar. Ketik `/tambahpiket @User` untuk mendaftarkan jadwal.")
+			return
+		}
+		_ = r.waClient.SendText(ctx, p.ChatJID, fmt.Sprintf("Gagal konfirmasi piket: %v", err))
+		return
+	}
+	_ = slot
+	name := p.PushName
+	if name == "" {
+		name = p.SenderPhone
+	}
+	reply := TemplatePiketSuccess(name, *logRecord.FedAt, r.cfg.AppTimezone)
+	_ = r.waClient.SendText(ctx, p.ChatJID, reply)
+}
+
+func (r *Router) handlePiketStatus(ctx context.Context, p *ParsedMessage) {
+	schedule, err := r.piketService.GetWeeklySchedule(ctx, time.Now())
+	if err != nil {
+		if errors.Is(err, piket.ErrNoSlotsConfigured) {
+			_ = r.waClient.SendText(ctx, p.ChatJID, "⚠️ Belum ada anggota piket yang terdaftar.\n\nContoh tambah piket:\n`/tambahpiket @Budi` (Solo)\n`/tambahpiket @Budi @Fahad` (Duet 🛵)")
+			return
+		}
+		_ = r.waClient.SendText(ctx, p.ChatJID, fmt.Sprintf("Gagal memuat jadwal piket: %v", err))
+		return
+	}
+
+	todayLog, _, _ := r.piketService.GetTodaySlotAndLog(ctx, time.Now())
+	statusStr := "⏳ Belum dikasih pakan"
+	if todayLog != nil && todayLog.Status == piket.StatusDone {
+		statusStr = "✅ Sudah dikasih pakan (Selesai)"
+	}
+
+	var sb strings.Builder
+	sb.WriteString("🐟 *JADWAL PIKET PAKAN LELE*\n\n")
+	sb.WriteString(fmt.Sprintf("Status Hari Ini: *%s*\n\n", statusStr))
+	sb.WriteString("📅 *Roster 7 Hari ke Depan:*\n")
+
+	for i, day := range schedule {
+		prefix := "  "
+		tag := ""
+		if day.IsToday {
+			prefix = "👉"
+			tag = " *(HARI INI)*"
+		}
+		var memberNames []string
+		for _, m := range day.Members {
+			memberNames = append(memberNames, "@"+m.Name)
+		}
+		namesStr := strings.Join(memberNames, " & ")
+		if len(day.Members) > 1 {
+			namesStr += " (Duet 🛵)"
+		}
+
+		sb.WriteString(fmt.Sprintf("%s %d. *%s* (%s): %s%s\n", prefix, i+1, day.DayName, day.Date, namesStr, tag))
+	}
+
+	sb.WriteString("\nKetik *sudah* atau kirim foto kolam jika sudah kasih pakan.")
+	_ = r.waClient.SendText(ctx, p.ChatJID, strings.TrimSpace(sb.String()))
+}
+
+func (r *Router) handlePiketTambah(ctx context.Context, p *ParsedMessage) {
+	var members []piket.Member
+
+	if len(p.MentionedJIDs) > 0 {
+		for _, jid := range p.MentionedJIDs {
+			phone := config.NormalizePhone(jid)
+			name := phone
+			if len(phone) > 4 {
+				name = "62" + phone[2:]
+			}
+			members = append(members, piket.Member{
+				Name:        name,
+				PhoneNumber: phone,
+				WhatsAppJID: jid,
+			})
+		}
+	} else if len(p.CommandArgs) > 0 {
+		for _, arg := range p.CommandArgs {
+			cleanPhone := config.NormalizePhone(arg)
+			if cleanPhone != "" {
+				members = append(members, piket.Member{
+					Name:        cleanPhone,
+					PhoneNumber: cleanPhone,
+					WhatsAppJID: cleanPhone + "@s.whatsapp.net",
+				})
+			}
+		}
+	}
+
+	if len(members) == 0 {
+		_ = r.waClient.SendText(ctx, p.ChatJID, "Format salah. Cukup tag orangnya ya le:\n\n*Solo (1 orang):*\n`/tambahpiket @Orang`\n\n*Duet (2 orang motoran):*\n`/tambahpiket @Orang1 @Orang2`")
+		return
+	}
+
+	slotType := "Solo"
+	if len(members) > 1 {
+		slotType = "Duet 🛵"
+	}
+
+	var mentionJIDs []string
+	var displayNames []string
+	for _, m := range members {
+		mentionJIDs = append(mentionJIDs, m.WhatsAppJID)
+		displayNames = append(displayNames, "@"+m.PhoneNumber)
+	}
+
+	slotName := strings.Join(displayNames, " & ")
+	slot, err := r.piketService.RegisterSlot(ctx, slotName, members)
+	if err != nil {
+		_ = r.waClient.SendText(ctx, p.ChatJID, fmt.Sprintf("Gagal menambah slot piket: %v", err))
+		return
+	}
+
+	reply := fmt.Sprintf(
+		"✅ *Slot Piket Berhasil Ditambahkan!*\n\n📌 Slot: #%d (%s)\n👥 Petugas: %s\n\nJadwal akan berputar otomatis secara adil.",
+		slot.RotationOrder, slotType, slotName,
+	)
+	_ = r.waClient.SendTextWithMentions(ctx, p.ChatJID, reply, mentionJIDs)
+}
+
+func (r *Router) handlePiketHapus(ctx context.Context, p *ParsedMessage) {
+	if len(p.CommandArgs) == 0 {
+		_ = r.waClient.SendText(ctx, p.ChatJID, "Gunakan: `/hapuspiket <ID_SLOT>`\nKetik `/listpiket` untuk melihat ID slot.")
+		return
+	}
+	var slotID int64
+	_, err := fmt.Sscanf(p.CommandArgs[0], "%d", &slotID)
+	if err != nil {
+		_ = r.waClient.SendText(ctx, p.ChatJID, "ID Slot harus berupa angka.")
+		return
+	}
+
+	err = r.piketService.DeleteSlot(ctx, slotID)
+	if err != nil {
+		_ = r.waClient.SendText(ctx, p.ChatJID, fmt.Sprintf("Gagal menghapus slot: %v", err))
+		return
+	}
+	_ = r.waClient.SendText(ctx, p.ChatJID, fmt.Sprintf("✅ Slot piket #%d berhasil dihapus.", slotID))
+}
+
+func (r *Router) handlePiketGanti(ctx context.Context, p *ParsedMessage) {
+	var mentionJIDs []string
+	var names []string
+
+	if len(p.MentionedJIDs) > 0 {
+		for _, jid := range p.MentionedJIDs {
+			phone := config.NormalizePhone(jid)
+			mentionJIDs = append(mentionJIDs, jid)
+			names = append(names, "@"+phone)
+		}
+	} else if len(p.CommandArgs) > 0 {
+		for _, arg := range p.CommandArgs {
+			clean := config.NormalizePhone(arg)
+			if clean != "" {
+				mentionJIDs = append(mentionJIDs, clean+"@s.whatsapp.net")
+				names = append(names, "@"+clean)
+			}
+		}
+	}
+
+	if len(names) == 0 {
+		_ = r.waClient.SendText(ctx, p.ChatJID, "Format salah. Tag orang yang menggantikan:\nContoh: `/gantipiket @Joko` atau `/gantipiket @Joko @Iwan`")
+		return
+	}
+
+	display := strings.Join(names, " & ")
+	err := r.piketService.SwapTodayPiket(ctx, time.Now(), display)
+	if err != nil {
+		_ = r.waClient.SendText(ctx, p.ChatJID, fmt.Sprintf("Gagal mengganti piket: %v", err))
+		return
+	}
+
+	reply := fmt.Sprintf("🔄 *Piket Hari Ini Berhasil Dialihkan!*\n\nPetugas hari ini sekarang: %s\nSiap-siap meluncur jam 16:30 WIB ya bro! 🛵", display)
+	_ = r.waClient.SendTextWithMentions(ctx, p.ChatJID, reply, mentionJIDs)
+}
+
+func (r *Router) handlePiketList(ctx context.Context, p *ParsedMessage) {
+	slots, err := r.piketService.ListSlots(ctx)
+	if err != nil || len(slots) == 0 {
+		_ = r.waClient.SendText(ctx, p.ChatJID, "Belum ada slot piket yang terdaftar. Ketik `/tambahpiket @User`.")
+		return
+	}
+
+	var sb strings.Builder
+	sb.WriteString("📋 *DAFTAR SLOT PIKET LELE:*\n\n")
+	for _, s := range slots {
+		slotType := "Solo"
+		if len(s.Members) > 1 {
+			slotType = "Duet 🛵"
+		}
+		var memberNames []string
+		for _, m := range s.Members {
+			memberNames = append(memberNames, "@"+m.PhoneNumber)
+		}
+		sb.WriteString(fmt.Sprintf("%d. Slot #%d (ID: %d - %s): %s\n", s.RotationOrder, s.RotationOrder, s.ID, slotType, strings.Join(memberNames, " & ")))
+	}
+	sb.WriteString("\nUntuk menghapus slot: `/hapuspiket <ID>`")
+	_ = r.waClient.SendText(ctx, p.ChatJID, strings.TrimSpace(sb.String()))
+}
+

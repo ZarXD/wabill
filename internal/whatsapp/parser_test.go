@@ -330,3 +330,115 @@ func TestParseIncomingMessageIgnored(t *testing.T) {
 		})
 	}
 }
+
+func TestPiketCommands(t *testing.T) {
+	groupJID := types.NewJID("120363123456789012", "g.us")
+	senderJID := types.NewJID("628123456789", types.DefaultUserServer)
+
+	piketTests := []struct {
+		name        string
+		text        string
+		wantCommand whatsapp.CommandType
+	}{
+		{"Check JID /jid", "/jid", whatsapp.CmdJID},
+		{"Check JID /cekid", "/cekid", whatsapp.CmdJID},
+		{"View Piket", "piket", whatsapp.CmdPiket},
+		{"View Jadwal Lele", "jadwal lele", whatsapp.CmdPiket},
+		{"Tambah Piket", "/tambahpiket @6281111111", whatsapp.CmdTambahPiket},
+		{"Ganti Piket", "/gantipiket @6282222222", whatsapp.CmdGantiPiket},
+		{"List Piket", "/listpiket", whatsapp.CmdListPiket},
+		{"Hapus Piket", "/hapuspiket 1", whatsapp.CmdHapusPiket},
+		{"Sudah Pakan 'sudah'", "sudah", whatsapp.CmdSudahPakan},
+		{"Sudah Pakan '/done'", "/done", whatsapp.CmdSudahPakan},
+	}
+
+	for _, tt := range piketTests {
+		t.Run(tt.name, func(t *testing.T) {
+			evt := &events.Message{
+				Info: types.MessageInfo{
+					MessageSource: types.MessageSource{
+						Chat:    groupJID,
+						Sender:  senderJID,
+						IsGroup: true,
+					},
+					ID: "MSG_PIKET",
+				},
+				Message: &waE2E.Message{
+					Conversation: proto.String(tt.text),
+				},
+			}
+			parsed := whatsapp.ParseIncomingMessage(evt)
+			if parsed == nil {
+				t.Fatalf("expected non-nil parsed message")
+			}
+			if parsed.Command != tt.wantCommand {
+				t.Errorf("expected command %v, got %v", tt.wantCommand, parsed.Command)
+			}
+		})
+	}
+}
+
+func TestMentionExtraction(t *testing.T) {
+	groupJID := types.NewJID("120363123456789012", "g.us")
+	senderJID := types.NewJID("628123456789", types.DefaultUserServer)
+
+	t.Run("ContextInfo MentionedJID extraction", func(t *testing.T) {
+		evt := &events.Message{
+			Info: types.MessageInfo{
+				MessageSource: types.MessageSource{
+					Chat:    groupJID,
+					Sender:  senderJID,
+					IsGroup: true,
+				},
+				ID: "MSG_MENTION_1",
+			},
+			Message: &waE2E.Message{
+				ExtendedTextMessage: &waE2E.ExtendedTextMessage{
+					Text: proto.String("/tambahpiket @Budi @Fahad"),
+					ContextInfo: &waE2E.ContextInfo{
+						MentionedJID: []string{"6281111111@s.whatsapp.net", "6282222222@s.whatsapp.net"},
+					},
+				},
+			},
+		}
+
+		parsed := whatsapp.ParseIncomingMessage(evt)
+		if parsed == nil {
+			t.Fatalf("expected non-nil parsed message")
+		}
+		if len(parsed.MentionedJIDs) != 2 {
+			t.Fatalf("expected 2 mentioned JIDs, got %d", len(parsed.MentionedJIDs))
+		}
+		if parsed.MentionedJIDs[0] != "6281111111@s.whatsapp.net" || parsed.MentionedJIDs[1] != "6282222222@s.whatsapp.net" {
+			t.Errorf("unexpected mentioned JIDs: %+v", parsed.MentionedJIDs)
+		}
+	})
+
+	t.Run("Raw text @phone extraction fallback", func(t *testing.T) {
+		evt := &events.Message{
+			Info: types.MessageInfo{
+				MessageSource: types.MessageSource{
+					Chat:    groupJID,
+					Sender:  senderJID,
+					IsGroup: true,
+				},
+				ID: "MSG_MENTION_2",
+			},
+			Message: &waE2E.Message{
+				Conversation: proto.String("/tambahpiket @081234567890"),
+			},
+		}
+
+		parsed := whatsapp.ParseIncomingMessage(evt)
+		if parsed == nil {
+			t.Fatalf("expected non-nil parsed message")
+		}
+		if len(parsed.MentionedJIDs) != 1 {
+			t.Fatalf("expected 1 mentioned JID extracted from raw text, got %d", len(parsed.MentionedJIDs))
+		}
+		if parsed.MentionedJIDs[0] != "6281234567890@s.whatsapp.net" {
+			t.Errorf("expected 6281234567890@s.whatsapp.net, got %s", parsed.MentionedJIDs[0])
+		}
+	})
+}
+

@@ -182,6 +182,45 @@ cp .env.example .env
 
 ---
 
+## 🐟 Fitur Piket Lele (Catfish Feeding Roster)
+
+Bot dilengkapi sistem otomasi jadwal piket pakan lele untuk 1 grup WhatsApp khusus dengan sistem rotasi harian dan anti-spam foto.
+
+### ⚙️ Konfigurasi .env
+```env
+# Ambil JID grup dengan mengetik /jid di dalam grup
+LELE_GROUP_JID=120363xxxxxxxxxxxx@g.us
+
+# Waktu Pengingat 3 Tahap (WIB)
+LELE_EARLY_REMINDER_TIME=15:00
+LELE_FEEDING_TIME=16:30
+LELE_OVERDUE_TIME=17:30
+
+LELE_PROOF_STORAGE_PATH=/data/piket-proofs
+```
+
+### 📋 Perintah di Grup WhatsApp
+
+| Perintah | Deskripsi |
+| :--- | :--- |
+| `/jid` atau `/cekid` | Menampilkan Group JID untuk disalin ke `.env` |
+| `/tambahpiket @User` | Mendaftarkan slot piket **Solo** (1 orang) via tag WhatsApp |
+| `/tambahpiket @User1 @User2` | Mendaftarkan slot piket **Duet 🛵** (2 orang boncengan motor) |
+| `/gantipiket @User` | Mengalihkan/menukar giliran piket hari ini ke orang lain |
+| `/hapuspiket <ID>` | Menghapus slot piket berdasarkan ID |
+| `/listpiket` | Melihat semua slot giliran piket yang terdaftar |
+| `piket` atau `jadwal lele` | Melihat status hari ini dan jadwal roster 7 hari ke depan |
+| `sudah` atau `/done` | Konfirmasi pakan lele selesai (alternatif tanpa foto) |
+| *Kirim Foto Kolam* | Mengirim foto bukti pakan lele (Otomatis ditandai selesai) |
+
+### 🛡️ Proteksi Anti-Spam Foto
+- Bot **HANYA** memproses foto jika status hari ini masih `PENDING`.
+- Foto hanya diterima dari **Petugas Hari Ini**, **Admin**, atau foto dengan caption `#pakan`.
+- Begitu satu foto valid diterima, status hari ini langsung dikunci `DONE`. Foto-foto lain / obrolan santai member di grup diabaikan sepenuhnya (*silent ignore*).
+- Jika pakan sudah selesai sebelum jam reminder, reminder susulan otomatis dibatalkan.
+
+---
+
 ## 📄 License
 
 MIT License.

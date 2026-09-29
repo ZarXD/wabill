@@ -41,16 +41,23 @@ func Connect(databaseURL string) (*DB, error) {
 
 // RunMigrations executes embedded SQL migrations.
 func (db *DB) RunMigrations(ctx context.Context) error {
-	migrationSQL, err := migrationsFS.ReadFile("migrations/000001_init_schema.up.sql")
-	if err != nil {
-		return fmt.Errorf("failed to read migration file: %w", err)
+	migrationFiles := []string{
+		"migrations/000001_init_schema.up.sql",
+		"migrations/000002_piket_lele.up.sql",
 	}
 
-	_, err = db.ExecContext(ctx, string(migrationSQL))
-	if err != nil {
-		return fmt.Errorf("failed to execute migration: %w", err)
+	for _, file := range migrationFiles {
+		migrationSQL, err := migrationsFS.ReadFile(file)
+		if err != nil {
+			return fmt.Errorf("failed to read migration file %s: %w", file, err)
+		}
+
+		_, err = db.ExecContext(ctx, string(migrationSQL))
+		if err != nil {
+			return fmt.Errorf("failed to execute migration %s: %w", file, err)
+		}
 	}
 
-	log.Println("[Database] Migrations executed successfully")
+	log.Println("[Database] All migrations executed successfully")
 	return nil
 }

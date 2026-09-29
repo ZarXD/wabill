@@ -32,22 +32,32 @@ const (
 	CmdAdminCloseSupport   CommandType = "ADMIN_CLOSE_SUPPORT"
 	CmdAdminMenu           CommandType = "ADMIN_MENU"
 	CmdAdminActivateMember CommandType = "ADMIN_ACTIVATE_MEMBER"
+
+	// Piket Lele Commands
+	CmdJID         CommandType = "JID"
+	CmdPiket       CommandType = "PIKET"
+	CmdTambahPiket CommandType = "TAMBAH_PIKET"
+	CmdHapusPiket  CommandType = "HAPUS_PIKET"
+	CmdGantiPiket  CommandType = "GANTI_PIKET"
+	CmdListPiket   CommandType = "LIST_PIKET"
+	CmdSudahPakan  CommandType = "SUDAH_PAKAN"
 )
 
 type ParsedMessage struct {
-	MessageID    string
-	SenderJID    string
-	SenderAltJID string
-	ChatJID      string
-	SenderPhone  string
-	PushName     string
-	IsFromMe     bool
-	IsGroup      bool
-	RawText      string
-	Command      CommandType
-	CommandArgs  []string
-	ImageMessage *waE2E.ImageMessage
-	ButtonID     string
+	MessageID     string
+	SenderJID     string
+	SenderAltJID  string
+	ChatJID       string
+	SenderPhone   string
+	PushName      string
+	IsFromMe      bool
+	IsGroup       bool
+	RawText       string
+	Command       CommandType
+	CommandArgs   []string
+	ImageMessage  *waE2E.ImageMessage
+	ButtonID      string
+	MentionedJIDs []string
 }
 
 // ParseIncomingMessage extracts the sender, message text, button ID, or media from a WhatsApp message event.
@@ -117,6 +127,9 @@ func ParseIncomingMessage(evt *events.Message) *ParsedMessage {
 		parsed.RawText = *msg.Conversation
 	case msg.ExtendedTextMessage != nil && msg.ExtendedTextMessage.Text != nil:
 		parsed.RawText = *msg.ExtendedTextMessage.Text
+		if msg.ExtendedTextMessage.ContextInfo != nil && len(msg.ExtendedTextMessage.ContextInfo.MentionedJID) > 0 {
+			parsed.MentionedJIDs = append(parsed.MentionedJIDs, msg.ExtendedTextMessage.ContextInfo.MentionedJID...)
+		}
 	case msg.ButtonsResponseMessage != nil:
 		if msg.ButtonsResponseMessage.SelectedButtonID != nil {
 			parsed.ButtonID = *msg.ButtonsResponseMessage.SelectedButtonID
@@ -142,6 +155,45 @@ func ParseIncomingMessage(evt *events.Message) *ParsedMessage {
 		parsed.ImageMessage = msg.ImageMessage
 		if msg.ImageMessage.Caption != nil {
 			parsed.RawText = *msg.ImageMessage.Caption
+		}
+		if msg.ImageMessage.ContextInfo != nil && len(msg.ImageMessage.ContextInfo.MentionedJID) > 0 {
+			parsed.MentionedJIDs = append(parsed.MentionedJIDs, msg.ImageMessage.ContextInfo.MentionedJID...)
+		}
+	}
+
+	// Also extract explicit @628... or @08... mentions written directly in RawText as fallback
+	if parsed.RawText != "" {
+		for _, word := range strings.Fields(parsed.RawText) {
+			if strings.HasPrefix(word, "@") {
+				clean := strings.TrimPrefix(word, "@")
+				clean = strings.Trim(clean, ",.!?:;")
+				digitsOnly := true
+				for _, r := range clean {
+					if r < '0' || r > '9' {
+						digitsOnly = false
+						break
+					}
+				}
+				if digitsOnly && len(clean) >= 9 {
+					// Normalize to WhatsApp JID format
+					if strings.HasPrefix(clean, "0") {
+						clean = "62" + clean[1:]
+					} else if strings.HasPrefix(clean, "8") {
+						clean = "62" + clean
+					}
+					jid := clean + "@s.whatsapp.net"
+					alreadyHas := false
+					for _, existing := range parsed.MentionedJIDs {
+						if existing == jid {
+							alreadyHas = true
+							break
+						}
+					}
+					if !alreadyHas {
+						parsed.MentionedJIDs = append(parsed.MentionedJIDs, jid)
+					}
+				}
+			}
 		}
 	}
 
@@ -229,6 +281,20 @@ func resolveCommand(p *ParsedMessage) {
 		p.Command = CmdAdminCloseSupport
 	case "admin", "menuadmin", "adminmenu":
 		p.Command = CmdAdminMenu
+	case "jid", "cekid", "id", "groupid":
+		p.Command = CmdJID
+	case "piket", "jadwal", "lele", "jadwalpiket", "jadwallele":
+		p.Command = CmdPiket
+	case "tambahpiket", "tambahslot", "addpiket", "addslot":
+		p.Command = CmdTambahPiket
+	case "hapuspiket", "hapusslot", "delpiket", "delslot":
+		p.Command = CmdHapusPiket
+	case "gantipiket", "gantislot", "tukarpiket":
+		p.Command = CmdGantiPiket
+	case "listpiket", "listslot", "daftarslot", "daftarpiket":
+		p.Command = CmdListPiket
+	case "sudah", "beres", "done", "selesai_pakan", "btn_sudah_pakan":
+		p.Command = CmdSudahPakan
 	default:
 		// Check exact button IDs
 		if p.ButtonID != "" {
@@ -247,6 +313,8 @@ func resolveCommand(p *ParsedMessage) {
 				p.Command = CmdSupport
 			case "btn_selesai":
 				p.Command = CmdCloseSupport
+			case "btn_sudah_pakan":
+				p.Command = CmdSudahPakan
 			case "btn_members_active":
 				p.Command = CmdAdminMembers
 				p.CommandArgs = []string{"active"}

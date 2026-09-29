@@ -22,6 +22,13 @@ type Config struct {
 	MaxProofSizeMB              int64
 	AdminJIDs                   []string
 	EnableNativeButtons         bool
+
+	// Catfish Feeding (Piket Lele) Configuration
+	LeleGroupJID          string
+	LeleEarlyReminderTime string
+	LeleFeedingTime       string
+	LeleOverdueTime       string
+	LeleProofStoragePath  string
 }
 
 // Load loads configuration from environment variables and optionally a .env file.
@@ -64,6 +71,11 @@ func Load() (*Config, error) {
 		MaxProofSizeMB:           maxProofMB,
 		AdminJIDs:                adminJIDs,
 		EnableNativeButtons:      enableButtons,
+		LeleGroupJID:             getEnv("LELE_GROUP_JID", ""),
+		LeleEarlyReminderTime:    getEnv("LELE_EARLY_REMINDER_TIME", "15:00"),
+		LeleFeedingTime:          getEnv("LELE_FEEDING_TIME", "16:30"),
+		LeleOverdueTime:          getEnv("LELE_OVERDUE_TIME", "17:30"),
+		LeleProofStoragePath:     getEnv("LELE_PROOF_STORAGE_PATH", "./data/piket-proofs"),
 	}
 
 	return cfg, nil

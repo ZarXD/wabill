@@ -470,3 +470,62 @@ Ketik *bayar* untuk melakukan perpanjangan sekarang.`,
 		subName, planName, FormatDate(expiresAt, loc), FormatRupiah(amount),
 	)
 }
+
+// Piket Lele Templates
+
+func TemplatePiketEarlyReminder(slotName string, membersDisplay string, feedingTime string, loc *time.Location) string {
+	now := time.Now().In(loc)
+	dayNames := map[time.Weekday]string{
+		time.Sunday: "Minggu", time.Monday: "Senin", time.Tuesday: "Selasa",
+		time.Wednesday: "Rabu", time.Thursday: "Kamis", time.Friday: "Jumat", time.Saturday: "Sabtu",
+	}
+	dayName := dayNames[now.Weekday()]
+	dateStr := FormatDate(now, loc)
+
+	return fmt.Sprintf(
+`🔔 *PERSIAPAN PIKET LELE!*
+
+📅 Hari ini: *%s, %s*
+👥 Petugas: *%s*
+⏰ Waktu Pakan: *%s WIB*
+
+Siap-siap atau kabari grup kalau berhalangan/minta tukar ya!
+Nanti setelah selesai pakan, kirim foto kolam di sini atau ketik *sudah*.`,
+		dayName, dateStr, membersDisplay, feedingTime,
+	)
+}
+
+func TemplatePiketFeedingReminder(membersDisplay string) string {
+	return fmt.Sprintf(
+`⏰ *WAKTUNYA PAKAN LELE!*
+
+%s silakan otw meluncur ke kolam! 🛵
+Takaran pakan secukupnya ya bro.
+
+Setelah selesai kasih pakan, kirim foto kolam sebagai bukti di sini atau ketik *sudah*.`,
+		membersDisplay,
+	)
+}
+
+func TemplatePiketOverdueReminder(membersDisplay string) string {
+	return fmt.Sprintf(
+`⚠️ *PERINGATAN: LELE KELAPARAN!*
+
+%s sudah lewat jam pakan nih, belum ada laporan pakan lele sore ini! 😱
+Segera meluncur ke kolam bro sebelum lele kanibal dan saling gigit! 🐟💥`,
+		membersDisplay,
+	)
+}
+
+func TemplatePiketSuccess(confirmedBy string, fedAt time.Time, loc *time.Location) string {
+	return fmt.Sprintf(
+`✅ *MANTAP! PAKAN LELE SELESAI*
+
+👤 Dikonfirmasi oleh: *%s*
+⏰ Waktu: *%s WIB*
+
+Status: *Lele kenyang, hidup tenang* 🐟✨`,
+		confirmedBy, FormatTime(fedAt, loc),
+	)
+}
+
