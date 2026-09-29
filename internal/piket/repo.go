@@ -122,25 +122,122 @@ func (r *Repo) ListActiveSlots(ctx context.Context) ([]Slot, error) {
 	return slots, nil
 }
 
-// DeleteSlot deletes a slot and its members by ID and re-sequences rotation orders.
-func (r *Repo) DeleteSlot(ctx context.Context, slotID int64) error {
-	_, err := r.db.ExecContext(ctx, "DELETE FROM piket_slots WHERE id = $1", slotID)
+// SetSlotForDay sets (or replaces) the assigned members for a specific day of week (1=Monday, ..., 6=Saturday).
+func (r *Repo) SetSlotForDay(ctx context.Context, dayOrder int, dayName string, members []Member) (*Slot, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
-		return err
+		return nil, fmt.Errorf("failed to begin tx: %w", err)
 	}
+	defer tx.Rollback()
 
-	// Re-sequence rotation_order so they always stay 1, 2, 3...
-	slots, err := r.ListActiveSlots(ctx)
+	now := time.Now().UTC()
+	var slotID int64
+	err = tx.QueryRowContext(ctx, "SELECT id FROM piket_slots WHERE rotation_order = $1", dayOrder).Scan(&slotID)
 	if err != nil {
-		return nil
-	}
-	for i, s := range slots {
-		newOrder := i + 1
-		if s.RotationOrder != newOrder {
-			_, _ = r.db.ExecContext(ctx, "UPDATE piket_slots SET rotation_order = $1 WHERE id = $2", newOrder, s.ID)
+		if errors.Is(err, sql.ErrNoRows) {
+			err = tx.QueryRowContext(ctx, `
+				INSERT INTO piket_slots (name, rotation_order, active, created_at, updated_at)
+				VALUES ($1, $2, true, $3, $3)
+				RETURNING id
+			`, dayName, dayOrder, now).Scan(&slotID)
+			if err != nil {
+				return nil, fmt.Errorf("failed to insert slot: %w", err)
+			}
+		} else {
+			return nil, fmt.Errorf("failed to query existing slot: %w", err)
+		}
+	} else {
+		_, err = tx.ExecContext(ctx, `
+			UPDATE piket_slots
+			SET name = $1, active = true, updated_at = $2
+			WHERE id = $3
+		`, dayName, now, slotID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to update slot: %w", err)
+		}
+
+		_, err = tx.ExecContext(ctx, "DELETE FROM piket_slot_members WHERE slot_id = $1", slotID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to clear old slot members: %w", err)
 		}
 	}
-	return nil
+
+	for i := range members {
+		m := &members[i]
+		m.SlotID = slotID
+		m.CreatedAt = now
+		err = tx.QueryRowContext(ctx, `
+			INSERT INTO piket_slot_members (slot_id, name, phone_number, whatsapp_jid, created_at)
+			VALUES ($1, $2, $3, $4, $5)
+			RETURNING id
+		`, m.SlotID, m.Name, m.PhoneNumber, m.WhatsAppJID, m.CreatedAt).Scan(&m.ID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to insert slot member: %w", err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("failed to commit tx: %w", err)
+	}
+
+	return &Slot{
+		ID:            slotID,
+		Name:          dayName,
+		RotationOrder: dayOrder,
+		Active:        true,
+		Members:       members,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}, nil
+}
+
+// GetSlotByDay returns the slot assigned for the given day order (1=Monday, ..., 6=Saturday).
+func (r *Repo) GetSlotByDay(ctx context.Context, dayOrder int) (*Slot, error) {
+	var s Slot
+	err := r.db.QueryRowContext(ctx, `
+		SELECT id, name, rotation_order, active, created_at, updated_at
+		FROM piket_slots
+		WHERE rotation_order = $1 AND active = true
+	`, dayOrder).Scan(&s.ID, &s.Name, &s.RotationOrder, &s.Active, &s.CreatedAt, &s.UpdatedAt)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	mRows, err := r.db.QueryContext(ctx, `
+		SELECT id, slot_id, name, phone_number, whatsapp_jid, created_at
+		FROM piket_slot_members
+		WHERE slot_id = $1
+		ORDER BY id ASC
+	`, s.ID)
+	if err != nil {
+		return nil, err
+	}
+	defer mRows.Close()
+
+	for mRows.Next() {
+		var m Member
+		if err := mRows.Scan(&m.ID, &m.SlotID, &m.Name, &m.PhoneNumber, &m.WhatsAppJID, &m.CreatedAt); err != nil {
+			return nil, err
+		}
+		s.Members = append(s.Members, m)
+	}
+
+	return &s, nil
+}
+
+// DeleteSlotByDay deletes the slot for a specific day of week (1=Monday, ..., 6=Saturday).
+func (r *Repo) DeleteSlotByDay(ctx context.Context, dayOrder int) error {
+	_, err := r.db.ExecContext(ctx, "DELETE FROM piket_slots WHERE rotation_order = $1", dayOrder)
+	return err
+}
+
+// DeleteSlot deletes a slot and its members by ID.
+func (r *Repo) DeleteSlot(ctx context.Context, slotID int64) error {
+	_, err := r.db.ExecContext(ctx, "DELETE FROM piket_slots WHERE id = $1", slotID)
+	return err
 }
 
 // ResetAllSlots deletes all piket slots.

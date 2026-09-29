@@ -287,7 +287,7 @@ func resolveCommand(p *ParsedMessage) {
 		p.Command = CmdJID
 	case "piket", "jadwal", "lele", "jadwalpiket", "jadwallele":
 		p.Command = CmdPiket
-	case "tambahpiket", "tambahslot", "addpiket", "addslot":
+	case "setpiket", "aturpiket", "tambahpiket", "tambahslot", "addpiket", "addslot":
 		p.Command = CmdTambahPiket
 	case "hapuspiket", "hapusslot", "delpiket", "delslot":
 		p.Command = CmdHapusPiket

@@ -60,11 +60,73 @@ func (s *Service) DeleteSlot(ctx context.Context, slotID int64) error {
 	return s.repo.DeleteSlot(ctx, slotID)
 }
 
+// ParseDayOfWeek parses an Indonesian/English day name or number into time.Weekday and standard Indonesian name.
+// Returns weekday (1=Monday ... 6=Saturday, 0=Sunday), localized name, and true if valid.
+func ParseDayOfWeek(input string) (time.Weekday, string, bool) {
+	lower := strings.ToLower(strings.TrimSpace(input))
+	lower = strings.TrimPrefix(lower, "#")
+	switch lower {
+	case "senin", "senen", "mon", "monday", "1":
+		return time.Monday, "Senin", true
+	case "selasa", "tue", "tuesday", "2":
+		return time.Tuesday, "Selasa", true
+	case "rabu", "rebo", "wed", "wednesday", "3":
+		return time.Wednesday, "Rabu", true
+	case "kamis", "kemis", "thu", "thursday", "4":
+		return time.Thursday, "Kamis", true
+	case "jumat", "jum'at", "jumaat", "fri", "friday", "5":
+		return time.Friday, "Jumat", true
+	case "sabtu", "sat", "saturday", "6":
+		return time.Saturday, "Sabtu", true
+	case "minggu", "ahad", "sun", "sunday", "7", "0":
+		return time.Sunday, "Minggu", true
+	default:
+		return 0, "", false
+	}
+}
+
+// SetDaySlot assigns one or more members to a specific day of week (1=Monday ... 6=Saturday).
+func (s *Service) SetDaySlot(ctx context.Context, dayOrder int, dayName string, members []Member) (*Slot, error) {
+	if len(members) == 0 {
+		return nil, errors.New("minimal 1 anggota untuk mendaftarkan jadwal piket")
+	}
+	if dayOrder < 1 || dayOrder > 6 {
+		return nil, errors.New("hari tidak valid. Pilihan: Senin, Selasa, Rabu, Kamis, Jumat, Sabtu (Minggu adalah Piket Bersama)")
+	}
+	return s.repo.SetSlotForDay(ctx, dayOrder, dayName, members)
+}
+
+// DeleteSlotByDay deletes the slot for a specific day of week.
+func (s *Service) DeleteSlotByDay(ctx context.Context, dayOrder int) error {
+	return s.repo.DeleteSlotByDay(ctx, dayOrder)
+}
+
 // DeleteSlotByQuery deletes a slot matching:
-// 1. Tagged members (if mentionedJIDs provided)
-// 2. Slot number (e.g. "1" for slot #1)
-// 3. Database ID
+// 1. Day name (e.g. "senin", "jumat")
+// 2. Tagged members (if mentionedJIDs provided)
+// 3. Slot number or ID
 func (s *Service) DeleteSlotByQuery(ctx context.Context, query string, mentionedJIDs []string) (*Slot, error) {
+	// 1. Check if query is a day of week
+	if strings.TrimSpace(query) != "" {
+		if wd, dayName, ok := ParseDayOfWeek(query); ok {
+			if wd == time.Sunday {
+				return nil, errors.New("hari Minggu adalah jadwal Piket Bersama dan tidak memiliki slot individu untuk dihapus")
+			}
+			dayOrder := int(wd)
+			slot, err := s.repo.GetSlotByDay(ctx, dayOrder)
+			if err != nil {
+				return nil, err
+			}
+			if slot == nil {
+				return nil, fmt.Errorf("jadwal piket hari %s belum diatur", dayName)
+			}
+			if err := s.repo.DeleteSlotByDay(ctx, dayOrder); err != nil {
+				return nil, err
+			}
+			return slot, nil
+		}
+	}
+
 	slots, err := s.repo.ListActiveSlots(ctx)
 	if err != nil {
 		return nil, err
@@ -75,7 +137,7 @@ func (s *Service) DeleteSlotByQuery(ctx context.Context, query string, mentioned
 
 	var targetSlot *Slot
 
-	// 1. Try finding by mentioned JIDs or phone
+	// 2. Try finding by mentioned JIDs or phone
 	if len(mentionedJIDs) > 0 {
 		for _, jid := range mentionedJIDs {
 			user := jid
@@ -101,32 +163,22 @@ func (s *Service) DeleteSlotByQuery(ctx context.Context, query string, mentioned
 		}
 	}
 
-	// 2. If not found by mention, try parsing query as slot number (rotation_order) or ID
+	// 3. If not found by mention, try parsing query as day order / slot number or ID
 	if targetSlot == nil && strings.TrimSpace(query) != "" {
 		trimmed := strings.TrimPrefix(strings.TrimSpace(query), "#")
 		var num int
 		if _, err := fmt.Sscanf(trimmed, "%d", &num); err == nil {
-			// First try by RotationOrder (what user sees: Slot #1, #2, etc.)
 			for i := range slots {
-				if slots[i].RotationOrder == num {
+				if slots[i].RotationOrder == num || slots[i].ID == int64(num) {
 					targetSlot = &slots[i]
 					break
-				}
-			}
-			// Fallback by database ID
-			if targetSlot == nil {
-				for i := range slots {
-					if slots[i].ID == int64(num) {
-						targetSlot = &slots[i]
-						break
-					}
 				}
 			}
 		}
 	}
 
 	if targetSlot == nil {
-		return nil, fmt.Errorf("slot piket tidak ditemukan. Ketik `/listpiket` untuk melihat daftar slot")
+		return nil, fmt.Errorf("jadwal piket tidak ditemukan. Ketik `/piket` untuk melihat jadwal")
 	}
 
 	if err := s.repo.DeleteSlot(ctx, targetSlot.ID); err != nil {
@@ -141,10 +193,7 @@ func (s *Service) ResetAllSlots(ctx context.Context) error {
 	return s.repo.ResetAllSlots(ctx)
 }
 
-// GetSlotAndLogForDate returns the assigned slot and log for a given date (creates log if not yet created).
 // CalculatePiketSlot computes the slot index for a given date, exempting Sundays.
-// On Sundays, it returns (true, 0).
-// On non-Sundays, rotation proceeds seamlessly (Monday resumes from Saturday's slot).
 func CalculatePiketSlot(targetDate time.Time, loc *time.Location, numSlots int) (bool, int) {
 	if numSlots <= 0 {
 		return false, 0
@@ -156,33 +205,9 @@ func CalculatePiketSlot(targetDate time.Time, loc *time.Location, numSlots int) 
 	if local.Weekday() == time.Sunday {
 		return true, 0
 	}
-
-	normalizedTarget := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, loc)
-	refDate := time.Date(2026, 9, 29, 0, 0, 0, 0, loc) // Anchor: Tuesday 2026-09-29 is slot index 0
-
-	var offset int
-	if normalizedTarget.Equal(refDate) {
-		offset = 0
-	} else if normalizedTarget.After(refDate) {
-		curr := refDate
-		for curr.Before(normalizedTarget) {
-			curr = curr.AddDate(0, 0, 1)
-			if curr.Weekday() != time.Sunday {
-				offset++
-			}
-		}
-	} else {
-		curr := refDate
-		for curr.After(normalizedTarget) {
-			if curr.Weekday() != time.Sunday {
-				offset--
-			}
-			curr = curr.AddDate(0, 0, -1)
-		}
-	}
-
-	slotIndex := ((offset % numSlots) + numSlots) % numSlots
-	return false, slotIndex
+	// With fixed days, day order is weekday (1=Monday ... 6=Saturday)
+	idx := (int(local.Weekday()) - 1) % numSlots
+	return false, idx
 }
 
 // GetSlotAndLogForDate returns the assigned slot and log for a given date (creates log if not yet created).
@@ -193,20 +218,17 @@ func (s *Service) GetSlotAndLogForDate(ctx context.Context, targetDate time.Time
 	}
 	localTarget := targetDate.In(loc)
 	dateStr := localTarget.Format("2006-01-02")
+	weekday := localTarget.Weekday()
 
-	slots, err := s.repo.ListActiveSlots(ctx)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to list slots: %w", err)
-	}
-	if len(slots) == 0 {
-		return nil, nil, ErrNoSlotsConfigured
-	}
-
-	isSunday, slotIndex := CalculatePiketSlot(targetDate, loc, len(slots))
-
+	isSunday := (weekday == time.Sunday)
 	var assignedSlot *Slot
+	var err error
+
 	if !isSunday {
-		assignedSlot = &slots[slotIndex]
+		assignedSlot, err = s.repo.GetSlotByDay(ctx, int(weekday))
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to get slot for day: %w", err)
+		}
 	}
 
 	logRecord, err := s.repo.GetLogByDate(ctx, dateStr)
@@ -217,19 +239,23 @@ func (s *Service) GetSlotAndLogForDate(ctx context.Context, targetDate time.Time
 	if logRecord == nil {
 		var slotID *int64
 		display := "Semua Anggota (Piket Bersama 🐟✨)"
-		if assignedSlot != nil {
-			slotID = &assignedSlot.ID
-			var names []string
-			for _, m := range assignedSlot.Members {
-				user := m.PhoneNumber
-				if m.WhatsAppJID != "" {
-					if parts := strings.Split(m.WhatsAppJID, "@"); len(parts) > 0 && parts[0] != "" {
-						user = parts[0]
+		if !isSunday {
+			if assignedSlot != nil && len(assignedSlot.Members) > 0 {
+				slotID = &assignedSlot.ID
+				var names []string
+				for _, m := range assignedSlot.Members {
+					user := m.PhoneNumber
+					if m.WhatsAppJID != "" {
+						if parts := strings.Split(m.WhatsAppJID, "@"); len(parts) > 0 && parts[0] != "" {
+							user = parts[0]
+						}
 					}
+					names = append(names, "@"+user)
 				}
-				names = append(names, "@"+user)
+				display = strings.Join(names, " & ")
+			} else {
+				display = "Belum diatur"
 			}
-			display = strings.Join(names, " & ")
 		}
 
 		newLog := &Log{
@@ -256,7 +282,7 @@ func (s *Service) GetTodaySlotAndLog(ctx context.Context, now time.Time) (*Log, 
 	return s.GetSlotAndLogForDate(ctx, now)
 }
 
-// GetWeeklySchedule returns the calculated roster for the next 7 days.
+// GetWeeklySchedule returns the fixed weekly roster for Senin s/d Minggu.
 type DaySchedule struct {
 	Date          string
 	DayName       string
@@ -273,39 +299,53 @@ func (s *Service) GetWeeklySchedule(ctx context.Context, now time.Time) ([]DaySc
 		loc = time.Local
 	}
 	localNow := now.In(loc)
+	todayWeekday := localNow.Weekday()
 
 	slots, err := s.repo.ListActiveSlots(ctx)
 	if err != nil {
 		return nil, err
 	}
-	if len(slots) == 0 {
-		return nil, ErrNoSlotsConfigured
+
+	slotMap := make(map[int]Slot)
+	for _, sl := range slots {
+		slotMap[sl.RotationOrder] = sl
 	}
 
-	dayNames := map[time.Weekday]string{
-		time.Sunday:    "Minggu",
-		time.Monday:    "Senin",
-		time.Tuesday:   "Selasa",
-		time.Wednesday: "Rabu",
-		time.Thursday:  "Kamis",
-		time.Friday:    "Jumat",
-		time.Saturday:  "Sabtu",
+	dayConfigs := []struct {
+		weekday time.Weekday
+		order   int
+		name    string
+	}{
+		{time.Monday, 1, "Senin"},
+		{time.Tuesday, 2, "Selasa"},
+		{time.Wednesday, 3, "Rabu"},
+		{time.Thursday, 4, "Kamis"},
+		{time.Friday, 5, "Jumat"},
+		{time.Saturday, 6, "Sabtu"},
+		{time.Sunday, 7, "Minggu"},
 	}
 
 	var schedule []DaySchedule
-	for i := 0; i < 7; i++ {
-		targetDate := localNow.AddDate(0, 0, i)
+	for _, dc := range dayConfigs {
+		isSunday := (dc.weekday == time.Sunday)
+		isToday := (dc.weekday == todayWeekday)
+
+		diff := int(dc.weekday) - int(todayWeekday)
+		targetDate := localNow.AddDate(0, 0, diff)
 		targetDateStr := targetDate.Format("2006-01-02")
-		isSunday, slotIndex := CalculatePiketSlot(targetDate, loc, len(slots))
 
 		var slotName string
 		var members []Member
+
 		if isSunday {
 			slotName = "Piket Bersama"
 		} else {
-			slot := slots[slotIndex]
-			slotName = slot.Name
-			members = slot.Members
+			if sl, ok := slotMap[dc.order]; ok {
+				slotName = sl.Name
+				members = sl.Members
+			} else {
+				slotName = "Belum diatur"
+			}
 		}
 
 		customDisplay := ""
@@ -316,11 +356,11 @@ func (s *Service) GetWeeklySchedule(ctx context.Context, now time.Time) ([]DaySc
 
 		schedule = append(schedule, DaySchedule{
 			Date:          targetDateStr,
-			DayName:       dayNames[targetDate.Weekday()],
+			DayName:       dc.name,
 			SlotName:      slotName,
 			Members:       members,
 			CustomDisplay: customDisplay,
-			IsToday:       (i == 0),
+			IsToday:       isToday,
 			IsSunday:      isSunday,
 		})
 	}

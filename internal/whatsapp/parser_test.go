@@ -345,6 +345,7 @@ func TestPiketCommands(t *testing.T) {
 		{"View Piket", "piket", whatsapp.CmdPiket},
 		{"View Jadwal Lele", "jadwal lele", whatsapp.CmdPiket},
 		{"Tambah Piket", "/tambahpiket @6281111111", whatsapp.CmdTambahPiket},
+		{"Set Piket", "/setpiket senin @6281111111", whatsapp.CmdTambahPiket},
 		{"Ganti Piket", "/gantipiket @6282222222", whatsapp.CmdGantiPiket},
 		{"List Piket", "/listpiket", whatsapp.CmdListPiket},
 		{"Hapus Piket", "/hapuspiket 1", whatsapp.CmdHapusPiket},

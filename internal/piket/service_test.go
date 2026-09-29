@@ -9,64 +9,79 @@ import (
 	"wabill/internal/piket"
 )
 
+func TestParseDayOfWeek(t *testing.T) {
+	testCases := []struct {
+		input       string
+		expectedWd  time.Weekday
+		expectedStr string
+		expectedOk  bool
+	}{
+		{"senin", time.Monday, "Senin", true},
+		{"Senin", time.Monday, "Senin", true},
+		{"selasa", time.Tuesday, "Selasa", true},
+		{"rabu", time.Wednesday, "Rabu", true},
+		{"kamis", time.Thursday, "Kamis", true},
+		{"jumat", time.Friday, "Jumat", true},
+		{"jum'at", time.Friday, "Jumat", true},
+		{"sabtu", time.Saturday, "Sabtu", true},
+		{"minggu", time.Sunday, "Minggu", true},
+		{"ahad", time.Sunday, "Minggu", true},
+		{"1", time.Monday, "Senin", true},
+		{"5", time.Friday, "Jumat", true},
+		{"ngasal", 0, "", false},
+		{"", 0, "", false},
+	}
+
+	for _, tc := range testCases {
+		wd, name, ok := piket.ParseDayOfWeek(tc.input)
+		if ok != tc.expectedOk {
+			t.Errorf("for input %q: expected ok=%v, got %v", tc.input, tc.expectedOk, ok)
+		}
+		if ok {
+			if wd != tc.expectedWd || name != tc.expectedStr {
+				t.Errorf("for input %q: expected (%v, %q), got (%v, %q)", tc.input, tc.expectedWd, tc.expectedStr, wd, name)
+			}
+		}
+	}
+}
+
 func TestPiketWeeklyScheduleRotation(t *testing.T) {
 	loc := time.FixedZone("WIB", 7*3600)
-	numSlots := 3
+	numSlots := 6
 
-	// Tuesday 2026-09-29 is refDate (Slot #1, index 0)
-	tue29 := time.Date(2026, 9, 29, 12, 0, 0, 0, loc)
-	sun, idx := piket.CalculatePiketSlot(tue29, loc, numSlots)
+	// Monday (Senin, day 1, idx 0)
+	mon := time.Date(2026, 9, 28, 12, 0, 0, 0, loc)
+	sun, idx := piket.CalculatePiketSlot(mon, loc, numSlots)
 	if sun || idx != 0 {
-		t.Fatalf("expected Tue 29 Sep to be slot 0, got sun=%v, idx=%d", sun, idx)
+		t.Fatalf("expected Monday to be idx 0, got sun=%v, idx=%d", sun, idx)
 	}
 
-	// Wednesday 2026-09-30 (Slot #2, index 1)
-	wed30 := tue29.AddDate(0, 0, 1)
-	sun, idx = piket.CalculatePiketSlot(wed30, loc, numSlots)
+	// Tuesday (Selasa, day 2, idx 1)
+	tue := time.Date(2026, 9, 29, 12, 0, 0, 0, loc)
+	sun, idx = piket.CalculatePiketSlot(tue, loc, numSlots)
 	if sun || idx != 1 {
-		t.Fatalf("expected Wed 30 Sep to be slot 1, got sun=%v, idx=%d", sun, idx)
+		t.Fatalf("expected Tuesday to be idx 1, got sun=%v, idx=%d", sun, idx)
 	}
 
-	// Thursday 2026-10-01 (Slot #3, index 2)
-	thu01 := tue29.AddDate(0, 0, 2)
-	sun, idx = piket.CalculatePiketSlot(thu01, loc, numSlots)
+	// Wednesday (Rabu, day 3, idx 2)
+	wed := time.Date(2026, 9, 30, 12, 0, 0, 0, loc)
+	sun, idx = piket.CalculatePiketSlot(wed, loc, numSlots)
 	if sun || idx != 2 {
-		t.Fatalf("expected Thu 01 Oct to be slot 2, got sun=%v, idx=%d", sun, idx)
+		t.Fatalf("expected Wednesday to be idx 2, got sun=%v, idx=%d", sun, idx)
 	}
 
-	// Friday 2026-10-02 (Slot #1, index 0)
-	fri02 := tue29.AddDate(0, 0, 3)
-	sun, idx = piket.CalculatePiketSlot(fri02, loc, numSlots)
-	if sun || idx != 0 {
-		t.Fatalf("expected Fri 02 Oct to be slot 0, got sun=%v, idx=%d", sun, idx)
+	// Saturday (Sabtu, day 6, idx 5)
+	sat := time.Date(2026, 10, 3, 12, 0, 0, 0, loc)
+	sun, idx = piket.CalculatePiketSlot(sat, loc, numSlots)
+	if sun || idx != 5 {
+		t.Fatalf("expected Saturday to be idx 5, got sun=%v, idx=%d", sun, idx)
 	}
 
-	// Saturday 2026-10-03 (Slot #2, index 1)
-	sat03 := tue29.AddDate(0, 0, 4)
-	sun, idx = piket.CalculatePiketSlot(sat03, loc, numSlots)
-	if sun || idx != 1 {
-		t.Fatalf("expected Sat 03 Oct to be slot 1, got sun=%v, idx=%d", sun, idx)
-	}
-
-	// Sunday 2026-10-04 (Piket Bersama: isSunday = true)
-	sun04 := tue29.AddDate(0, 0, 5)
-	sun, idx = piket.CalculatePiketSlot(sun04, loc, numSlots)
+	// Sunday (Minggu: isSunday = true)
+	sunDate := time.Date(2026, 10, 4, 12, 0, 0, 0, loc)
+	sun, _ = piket.CalculatePiketSlot(sunDate, loc, numSlots)
 	if !sun {
-		t.Fatalf("expected Sun 04 Oct to have isSunday=true, got sun=%v, idx=%d", sun, idx)
-	}
-
-	// Monday 2026-10-05 (Slot #3, index 2 - resumes seamlessly after Saturday's Slot #2!)
-	mon05 := tue29.AddDate(0, 0, 6)
-	sun, idx = piket.CalculatePiketSlot(mon05, loc, numSlots)
-	if sun || idx != 2 {
-		t.Fatalf("expected Mon 05 Oct to be slot 2 (resuming after Saturday), got sun=%v, idx=%d", sun, idx)
-	}
-
-	// Tuesday 2026-10-06 (Slot #1, index 0)
-	tue06 := tue29.AddDate(0, 0, 7)
-	sun, idx = piket.CalculatePiketSlot(tue06, loc, numSlots)
-	if sun || idx != 0 {
-		t.Fatalf("expected Tue 06 Oct to be slot 0, got sun=%v, idx=%d", sun, idx)
+		t.Fatalf("expected Sunday to have isSunday=true, got sun=%v", sun)
 	}
 }
 

@@ -1138,11 +1138,11 @@ func (r *Router) handlePiketStatus(ctx context.Context, p *ParsedMessage) {
 	}
 
 	var sb strings.Builder
-	sb.WriteString("🐟 *JADWAL PIKET PAKAN LELE*\n")
+	sb.WriteString("🐟 *JADWAL PIKET PAKAN LELE (MINGGUAN)*\n")
 	sb.WriteString("━━━━━━━━━━━━━━━━━━━━\n")
 	sb.WriteString(fmt.Sprintf("Status Hari Ini: %s\n", statusStr))
 	sb.WriteString("━━━━━━━━━━━━━━━━━━━━\n\n")
-	sb.WriteString("📅 *Roster 7 Hari ke Depan:*\n\n")
+	sb.WriteString("📅 *Jadwal Tetap Mingguan:*\n\n")
 
 	var mentionJIDs []string
 	seenJID := make(map[string]bool)
@@ -1150,9 +1150,18 @@ func (r *Router) handlePiketStatus(ctx context.Context, p *ParsedMessage) {
 	for i, day := range schedule {
 		if day.IsSunday {
 			if day.IsToday {
-				sb.WriteString(fmt.Sprintf("👉 *%d. %s (%s) — HARI INI*\n   👥 *Piket Bersama:* Datang Semua 🐟✨\n\n", i+1, day.DayName, day.Date))
+				sb.WriteString(fmt.Sprintf("👉 *%d. %s* — 👥 *Piket Bersama: Datang Semua 🐟✨* (HARI INI)\n\n", i+1, day.DayName))
 			} else {
-				sb.WriteString(fmt.Sprintf("   *%d. %s* (%s)\n   👥 *Piket Bersama:* Datang Semua 🐟✨\n\n", i+1, day.DayName, day.Date))
+				sb.WriteString(fmt.Sprintf("   *%d. %s* — 👥 *Piket Bersama: Datang Semua 🐟✨*\n\n", i+1, day.DayName))
+			}
+			continue
+		}
+
+		if len(day.Members) == 0 && day.CustomDisplay == "" {
+			if day.IsToday {
+				sb.WriteString(fmt.Sprintf("👉 *%d. %s:* _(Belum diatur)_ (HARI INI)\n\n", i+1, day.DayName))
+			} else {
+				sb.WriteString(fmt.Sprintf("   *%d. %s:* _(Belum diatur)_\n\n", i+1, day.DayName))
 			}
 			continue
 		}
@@ -1195,9 +1204,9 @@ func (r *Router) handlePiketStatus(ctx context.Context, p *ParsedMessage) {
 		}
 
 		if day.IsToday {
-			sb.WriteString(fmt.Sprintf("👉 *%d. %s (%s) — HARI INI*\n   👥 Petugas: %s (%s)\n\n", i+1, day.DayName, day.Date, namesStr, slotType))
+			sb.WriteString(fmt.Sprintf("👉 *%d. %s:* %s (%s) — HARI INI\n\n", i+1, day.DayName, namesStr, slotType))
 		} else {
-			sb.WriteString(fmt.Sprintf("   *%d. %s* (%s)\n   👥 Petugas: %s (%s)\n\n", i+1, day.DayName, day.Date, namesStr, slotType))
+			sb.WriteString(fmt.Sprintf("   *%d. %s:* %s (%s)\n\n", i+1, day.DayName, namesStr, slotType))
 		}
 	}
 
@@ -1209,14 +1218,32 @@ func (r *Router) handlePiketStatus(ctx context.Context, p *ParsedMessage) {
 
 func (r *Router) handlePiketTambah(ctx context.Context, p *ParsedMessage) {
 	if !r.isAdminSender(p) {
-		_ = r.waClient.SendText(ctx, p.ChatJID, "⛔ Hanya admin yang dapat menambah atau mengatur susunan slot piket.")
+		_ = r.waClient.SendText(ctx, p.ChatJID, "⛔ Hanya admin yang dapat mengatur jadwal piket.")
+		return
+	}
+
+	// Format: /setpiket <hari> <anggota...>
+	if len(p.CommandArgs) == 0 {
+		msg := "Format perintah:\n`/setpiket <hari> <anggota...>`\n\nContoh:\n• `/setpiket senin @Ari` (Ari piket hari Senin)\n• `/setpiket jumat @Ari` (Ari piket hari Jumat)\n• `/setpiket selasa saya` (Diri sendiri hari Selasa)\n• `/setpiket sabtu saya @Budi` (Duet berdua hari Sabtu)\n\nPilihan hari: *Senin, Selasa, Rabu, Kamis, Jumat, Sabtu*\n_(Hari Minggu otomatis Piket Bersama 🐟✨)_"
+		_ = r.waClient.SendText(ctx, p.ChatJID, msg)
+		return
+	}
+
+	targetWeekday, dayName, isDay := piket.ParseDayOfWeek(p.CommandArgs[0])
+	if !isDay {
+		msg := fmt.Sprintf("⚠️ Nama hari *%s* tidak dikenali.\n\nPilihan hari yang tersedia:\n• *Senin, Selasa, Rabu, Kamis, Jumat, Sabtu*\n\nContoh penggunaan:\n`/setpiket senin @Ari`\n`/setpiket selasa saya`", p.CommandArgs[0])
+		_ = r.waClient.SendText(ctx, p.ChatJID, msg)
+		return
+	}
+
+	if targetWeekday == time.Sunday {
+		_ = r.waClient.SendText(ctx, p.ChatJID, "ℹ️ *Hari Minggu adalah jadwal Piket Bersama (Datang Semua)!*\n\nTidak perlu mengatur petugas individu di hari Minggu ya bro. Semua anggota diajak kumpul bareng jam 16:30 WIB 🐟✨")
 		return
 	}
 
 	seen := make(map[string]bool)
 	var members []piket.Member
 
-	// Helper to add sender themselves (for when user cannot tag their own account in WhatsApp)
 	senderPhone := p.SenderPhone
 	if senderPhone == "" {
 		senderPhone = config.NormalizePhone(p.SenderJID)
@@ -1245,9 +1272,10 @@ func (r *Router) handlePiketTambah(ctx context.Context, p *ParsedMessage) {
 		}
 	}
 
-	// 1. If someone just types "/tambahpiket" with NO arguments and NO mentions:
-	// Automatically register the sender!
-	if len(p.CommandArgs) == 0 && len(p.MentionedJIDs) == 0 {
+	memberArgs := p.CommandArgs[1:]
+
+	// 1. If only day provided and no mentions (e.g. "/setpiket selasa"), register sender
+	if len(memberArgs) == 0 && len(p.MentionedJIDs) == 0 {
 		addSender()
 	}
 
@@ -1275,9 +1303,9 @@ func (r *Router) handlePiketTambah(ctx context.Context, p *ParsedMessage) {
 		}
 	}
 
-	// 3. Process args: check for self keywords ("saya", "gw", "aku", "me") or phone numbers
-	if len(p.CommandArgs) > 0 {
-		for _, arg := range p.CommandArgs {
+	// 3. Process remaining args: self keywords ("saya", "gw", "aku", "me") or phone numbers
+	if len(memberArgs) > 0 {
+		for _, arg := range memberArgs {
 			lower := strings.ToLower(strings.TrimSpace(arg))
 			switch lower {
 			case "saya", "gw", "gue", "aku", "me", "gua", "diriku", "ane", "self":
@@ -1297,7 +1325,7 @@ func (r *Router) handlePiketTambah(ctx context.Context, p *ParsedMessage) {
 	}
 
 	if len(members) == 0 {
-		_ = r.waClient.SendText(ctx, p.ChatJID, "Format salah. Kamu bisa gunakan:\n\n*Daftar Diri Sendiri (Solo):*\n`/tambahpiket saya` atau cukup ketik `/tambahpiket`\n\n*Daftar Orang Lain (Solo):*\n`/tambahpiket @Teman`\n\n*Duet (Barengan Kamu & Teman):*\n`/tambahpiket saya @Teman`\n\n*Duet (2 Teman):*\n`/tambahpiket @Teman1 @Teman2`")
+		_ = r.waClient.SendText(ctx, p.ChatJID, fmt.Sprintf("Harap sebutkan anggota untuk piket hari %s.\nContoh: `/setpiket %s @Ari` atau `/setpiket %s saya`", dayName, strings.ToLower(dayName), strings.ToLower(dayName)))
 		return
 	}
 
@@ -1316,28 +1344,27 @@ func (r *Router) handlePiketTambah(ctx context.Context, p *ParsedMessage) {
 		displayNames = append(displayNames, tag)
 	}
 
-	slotName := strings.Join(displayNames, " & ")
-	slot, err := r.piketService.RegisterSlot(ctx, slotName, members)
+	_, err := r.piketService.SetDaySlot(ctx, int(targetWeekday), dayName, members)
 	if err != nil {
-		_ = r.waClient.SendText(ctx, p.ChatJID, fmt.Sprintf("Gagal menambah slot piket: %v", err))
+		_ = r.waClient.SendText(ctx, p.ChatJID, fmt.Sprintf("Gagal mengatur jadwal piket: %v", err))
 		return
 	}
 
 	reply := fmt.Sprintf(
-		"✅ *Slot Piket Berhasil Ditambahkan!*\n\n📌 Slot: #%d (%s)\n👥 Petugas: %s\n\nJadwal akan berputar otomatis secara adil.",
-		slot.RotationOrder, slotType, slotName,
+		"✅ *Jadwal Piket Hari %s Berhasil Diatur!*\n\n📅 Hari: *%s*\n👥 Petugas: %s (%s)\n\nJadwal ini akan otomatis berlaku setiap hari %s.",
+		dayName, dayName, strings.Join(displayNames, " & "), slotType, dayName,
 	)
 	_ = r.waClient.SendTextWithMentions(ctx, p.ChatJID, reply, mentionJIDs)
 }
 
 func (r *Router) handlePiketHapus(ctx context.Context, p *ParsedMessage) {
 	if !r.isAdminSender(p) {
-		_ = r.waClient.SendText(ctx, p.ChatJID, "⛔ Hanya admin yang dapat menghapus slot piket.")
+		_ = r.waClient.SendText(ctx, p.ChatJID, "⛔ Hanya admin yang dapat menghapus jadwal piket.")
 		return
 	}
 
 	if len(p.CommandArgs) == 0 && len(p.MentionedJIDs) == 0 {
-		_ = r.waClient.SendText(ctx, p.ChatJID, "Format: `/hapuspiket @Orang` atau `/hapuspiket <Nomor_Slot>`\nContoh: `/hapuspiket @Ari` atau `/hapuspiket 1`")
+		_ = r.waClient.SendText(ctx, p.ChatJID, "Format: `/hapuspiket <Hari>`\nContoh: `/hapuspiket senin` atau `/hapuspiket jumat`")
 		return
 	}
 
@@ -1352,7 +1379,7 @@ func (r *Router) handlePiketHapus(ctx context.Context, p *ParsedMessage) {
 		return
 	}
 
-	_ = r.waClient.SendText(ctx, p.ChatJID, fmt.Sprintf("✅ Slot piket #%d (%s) berhasil dihapus.", deletedSlot.RotationOrder, deletedSlot.Name))
+	_ = r.waClient.SendText(ctx, p.ChatJID, fmt.Sprintf("✅ Jadwal piket hari %s berhasil dikosongkan.", deletedSlot.Name))
 }
 
 func (r *Router) handlePiketReset(ctx context.Context, p *ParsedMessage) {
@@ -1366,7 +1393,7 @@ func (r *Router) handlePiketReset(ctx context.Context, p *ParsedMessage) {
 		_ = r.waClient.SendText(ctx, p.ChatJID, fmt.Sprintf("Gagal reset piket: %v", err))
 		return
 	}
-	_ = r.waClient.SendText(ctx, p.ChatJID, "🗑️ Semua slot piket lele telah berhasil direset / dikosongkan. Silakan daftarkan ulang dengan `/tambahpiket`.")
+	_ = r.waClient.SendText(ctx, p.ChatJID, "🗑️ Semua jadwal piket lele telah berhasil direset / dikosongkan. Silakan atur kembali dengan `/setpiket <hari> @Orang`.")
 }
 
 func (r *Router) handlePiketGanti(ctx context.Context, p *ParsedMessage) {
@@ -1487,45 +1514,7 @@ func (r *Router) handlePiketGanti(ctx context.Context, p *ParsedMessage) {
 }
 
 func (r *Router) handlePiketList(ctx context.Context, p *ParsedMessage) {
-	slots, err := r.piketService.ListSlots(ctx)
-	if err != nil || len(slots) == 0 {
-		_ = r.waClient.SendText(ctx, p.ChatJID, "⚠️ Belum ada slot piket yang terdaftar. Ketik `/tambahpiket @User`.")
-		return
-	}
-
-	var sb strings.Builder
-	sb.WriteString("📋 *DAFTAR GILIRAN PIKET LELE*\n")
-	sb.WriteString("━━━━━━━━━━━━━━━━━━━━\n\n")
-
-	var mentionJIDs []string
-	seenJID := make(map[string]bool)
-
-	for _, s := range slots {
-		slotType := "Solo"
-		if len(s.Members) > 1 {
-			slotType = "Duet 🛵"
-		}
-		var memberNames []string
-		for _, m := range s.Members {
-			tag, jid := getMemberMentionTag(m)
-			memberNames = append(memberNames, tag)
-			if jid != "" && !seenJID[jid] {
-				seenJID[jid] = true
-				mentionJIDs = append(mentionJIDs, jid)
-			}
-		}
-
-		sb.WriteString(fmt.Sprintf("*Slot #%d* (%s)\n👥 Petugas: %s\n\n", s.RotationOrder, slotType, strings.Join(memberNames, " & ")))
-	}
-
-	sb.WriteString("━━━━━━━━━━━━━━━━━━━━\n")
-	sb.WriteString("💡 *Info Giliran:*\n")
-	sb.WriteString("• Giliran berjalan Senin s/d Sabtu: Slot #1 ➔ Slot #2 ➔ dst.\n")
-	sb.WriteString("• Hari Minggu: Piket Bersama (datang semua barengan 🐟✨).\n")
-	sb.WriteString("• Hapus slot: `/hapuspiket <Nomor_Slot>` (contoh: `/hapuspiket 1`)\n")
-	sb.WriteString("• Tambah slot: `/tambahpiket @Orang` (atau `/tambahpiket saya`)")
-
-	_ = r.waClient.SendTextWithMentions(ctx, p.ChatJID, strings.TrimSpace(sb.String()), mentionJIDs)
+	r.handlePiketStatus(ctx, p)
 }
 
 func (r *Router) handlePiketMenu(ctx context.Context, p *ParsedMessage) {
@@ -1535,23 +1524,24 @@ func (r *Router) handlePiketMenu(ctx context.Context, p *ParsedMessage) {
 	sb.WriteString("━━━━━━━━━━━━━━━━━━━━\n")
 	sb.WriteString("Halo! Berikut daftar perintah piket pakan lele di grup ini:\n\n")
 
-	sb.WriteString("📋 *Jadwal & Giliran:*\n")
-	sb.WriteString("• `/piket` — Cek petugas hari ini & roster 7 hari\n")
-	sb.WriteString("• `/listpiket` — Cek susunan semua slot giliran\n\n")
+	sb.WriteString("📋 *Jadwal & Petugas:*\n")
+	sb.WriteString("• `/piket` / `/jadwal` — Cek jadwal mingguan & status hari ini\n")
+	sb.WriteString("• `/listpiket` — Cek daftar jadwal mingguan\n\n")
 
 	sb.WriteString("🛵 *Konfirmasi Pakan:*\n")
 	sb.WriteString("• `sudah` / `beres` — Konfirmasi lele sudah diberi pakan\n")
-	sb.WriteString("• Kirim Foto Kolam — Foto bukti pakan (hanya petugas hari ini/admin)\n\n")
+	sb.WriteString("• Kirim Foto Kolam — Foto bukti pakan (petugas hari ini / admin)\n\n")
 
-	sb.WriteString("🔄 *Tukar Giliran:*\n")
-	sb.WriteString("• `/gantipiket @Teman` — Alihkan tugas hari ini ke teman\n\n")
+	sb.WriteString("🔄 *Tukar Jadwal:*\n")
+	sb.WriteString("• `/gantipiket @Teman` — Alihkan tugas hari ini ke teman\n")
+	sb.WriteString("• `/gantipiket besok @Teman` — Alihkan tugas besok ke teman\n\n")
 
 	if isAdmin {
 		sb.WriteString("⚙️ *Pengaturan Admin:*\n")
-		sb.WriteString("• `/tambahpiket` — Daftarkan diri sendiri (Solo)\n")
-		sb.WriteString("• `/tambahpiket @Teman` — Daftarkan teman (Solo)\n")
-		sb.WriteString("• `/tambahpiket saya @Teman` — Daftarkan slot Duet 🛵\n")
-		sb.WriteString("• `/hapuspiket <Nomor>` — Hapus slot piket (contoh: `/hapuspiket 1`)\n")
+		sb.WriteString("• `/setpiket <hari> @Teman` — Atur petugas hari tersebut (Solo)\n")
+		sb.WriteString("• `/setpiket <hari> saya` — Atur diri sendiri untuk hari tersebut\n")
+		sb.WriteString("• `/setpiket <hari> @Teman1 @Teman2` — Atur petugas Duet 🛵\n")
+		sb.WriteString("• `/hapuspiket <hari>` — Kosongkan jadwal hari tersebut\n")
 		sb.WriteString("• `/resetpiket` — Kosongkan & reset semua jadwal piket\n\n")
 	}
 
