@@ -1273,8 +1273,11 @@ func (r *Router) handlePiketTambah(ctx context.Context, p *ParsedMessage) {
 	var mentionJIDs []string
 	var displayNames []string
 	for _, m := range members {
-		mentionJIDs = append(mentionJIDs, m.WhatsAppJID)
-		displayNames = append(displayNames, "@"+m.PhoneNumber)
+		tag, jid := getMemberMentionTag(m)
+		if jid != "" {
+			mentionJIDs = append(mentionJIDs, jid)
+		}
+		displayNames = append(displayNames, tag)
 	}
 
 	slotName := strings.Join(displayNames, " & ")
