@@ -60,6 +60,87 @@ func (s *Service) DeleteSlot(ctx context.Context, slotID int64) error {
 	return s.repo.DeleteSlot(ctx, slotID)
 }
 
+// DeleteSlotByQuery deletes a slot matching:
+// 1. Tagged members (if mentionedJIDs provided)
+// 2. Slot number (e.g. "1" for slot #1)
+// 3. Database ID
+func (s *Service) DeleteSlotByQuery(ctx context.Context, query string, mentionedJIDs []string) (*Slot, error) {
+	slots, err := s.repo.ListActiveSlots(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if len(slots) == 0 {
+		return nil, ErrNoSlotsConfigured
+	}
+
+	var targetSlot *Slot
+
+	// 1. Try finding by mentioned JIDs or phone
+	if len(mentionedJIDs) > 0 {
+		for _, jid := range mentionedJIDs {
+			user := jid
+			if atIdx := strings.Index(jid, "@"); atIdx != -1 {
+				user = jid[:atIdx]
+			}
+			cleanUser := config.NormalizePhone(user)
+			for i := range slots {
+				for _, m := range slots[i].Members {
+					mClean := config.NormalizePhone(m.PhoneNumber)
+					if m.WhatsAppJID == jid || m.PhoneNumber == user || (cleanUser != "" && mClean == cleanUser) {
+						targetSlot = &slots[i]
+						break
+					}
+				}
+				if targetSlot != nil {
+					break
+				}
+			}
+			if targetSlot != nil {
+				break
+			}
+		}
+	}
+
+	// 2. If not found by mention, try parsing query as slot number (rotation_order) or ID
+	if targetSlot == nil && strings.TrimSpace(query) != "" {
+		trimmed := strings.TrimPrefix(strings.TrimSpace(query), "#")
+		var num int
+		if _, err := fmt.Sscanf(trimmed, "%d", &num); err == nil {
+			// First try by RotationOrder (what user sees: Slot #1, #2, etc.)
+			for i := range slots {
+				if slots[i].RotationOrder == num {
+					targetSlot = &slots[i]
+					break
+				}
+			}
+			// Fallback by database ID
+			if targetSlot == nil {
+				for i := range slots {
+					if slots[i].ID == int64(num) {
+						targetSlot = &slots[i]
+						break
+					}
+				}
+			}
+		}
+	}
+
+	if targetSlot == nil {
+		return nil, fmt.Errorf("slot piket tidak ditemukan. Ketik `/listpiket` untuk melihat daftar slot")
+	}
+
+	if err := s.repo.DeleteSlot(ctx, targetSlot.ID); err != nil {
+		return nil, err
+	}
+
+	return targetSlot, nil
+}
+
+// ResetAllSlots deletes all piket slots.
+func (s *Service) ResetAllSlots(ctx context.Context) error {
+	return s.repo.ResetAllSlots(ctx)
+}
+
 // GetTodaySlotAndLog returns today's assigned slot and log (creates log if not yet created).
 func (s *Service) GetTodaySlotAndLog(ctx context.Context, now time.Time) (*Log, *Slot, error) {
 	loc := s.cfg.AppTimezone

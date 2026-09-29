@@ -41,6 +41,7 @@ const (
 	CmdGantiPiket  CommandType = "GANTI_PIKET"
 	CmdListPiket   CommandType = "LIST_PIKET"
 	CmdSudahPakan  CommandType = "SUDAH_PAKAN"
+	CmdResetPiket  CommandType = "RESET_PIKET"
 )
 
 type ParsedMessage struct {
@@ -295,6 +296,8 @@ func resolveCommand(p *ParsedMessage) {
 		p.Command = CmdListPiket
 	case "sudah", "beres", "done", "selesai_pakan", "btn_sudah_pakan":
 		p.Command = CmdSudahPakan
+	case "resetpiket", "clearpiket", "hapussemuapiket":
+		p.Command = CmdResetPiket
 	default:
 		// Check exact button IDs
 		if p.ButtonID != "" {

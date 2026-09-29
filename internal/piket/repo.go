@@ -122,9 +122,30 @@ func (r *Repo) ListActiveSlots(ctx context.Context) ([]Slot, error) {
 	return slots, nil
 }
 
-// DeleteSlot deletes a slot and its members by ID.
+// DeleteSlot deletes a slot and its members by ID and re-sequences rotation orders.
 func (r *Repo) DeleteSlot(ctx context.Context, slotID int64) error {
 	_, err := r.db.ExecContext(ctx, "DELETE FROM piket_slots WHERE id = $1", slotID)
+	if err != nil {
+		return err
+	}
+
+	// Re-sequence rotation_order so they always stay 1, 2, 3...
+	slots, err := r.ListActiveSlots(ctx)
+	if err != nil {
+		return nil
+	}
+	for i, s := range slots {
+		newOrder := i + 1
+		if s.RotationOrder != newOrder {
+			_, _ = r.db.ExecContext(ctx, "UPDATE piket_slots SET rotation_order = $1 WHERE id = $2", newOrder, s.ID)
+		}
+	}
+	return nil
+}
+
+// ResetAllSlots deletes all piket slots.
+func (r *Repo) ResetAllSlots(ctx context.Context) error {
+	_, err := r.db.ExecContext(ctx, "DELETE FROM piket_slots")
 	return err
 }
 

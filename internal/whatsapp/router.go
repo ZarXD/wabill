@@ -284,6 +284,8 @@ func (r *Router) handleCommand(ctx context.Context, p *ParsedMessage) {
 		r.handlePiketHapus(ctx, p)
 	case CmdSudahPakan:
 		r.handlePiketSudah(ctx, p)
+	case CmdResetPiket:
+		r.handlePiketReset(ctx, p)
 	default:
 		// Ignore unrelated chat messages to avoid spamming the user
 	}
@@ -959,6 +961,8 @@ func (r *Router) handleLeleGroupMessage(ctx context.Context, p *ParsedMessage) {
 		r.handlePiketGanti(ctx, p)
 	case CmdListPiket:
 		r.handlePiketList(ctx, p)
+	case CmdResetPiket:
+		r.handlePiketReset(ctx, p)
 	default:
 		// Normal casual conversations/memes in the group are SILENTLY IGNORED!
 	}
@@ -1131,23 +1135,32 @@ func (r *Router) handlePiketTambah(ctx context.Context, p *ParsedMessage) {
 }
 
 func (r *Router) handlePiketHapus(ctx context.Context, p *ParsedMessage) {
-	if len(p.CommandArgs) == 0 {
-		_ = r.waClient.SendText(ctx, p.ChatJID, "Gunakan: `/hapuspiket <ID_SLOT>`\nKetik `/listpiket` untuk melihat ID slot.")
-		return
-	}
-	var slotID int64
-	_, err := fmt.Sscanf(p.CommandArgs[0], "%d", &slotID)
-	if err != nil {
-		_ = r.waClient.SendText(ctx, p.ChatJID, "ID Slot harus berupa angka.")
+	if len(p.CommandArgs) == 0 && len(p.MentionedJIDs) == 0 {
+		_ = r.waClient.SendText(ctx, p.ChatJID, "Format: `/hapuspiket @Orang` atau `/hapuspiket <Nomor_Slot>`\nContoh: `/hapuspiket @Ari` atau `/hapuspiket 1`")
 		return
 	}
 
-	err = r.piketService.DeleteSlot(ctx, slotID)
+	arg := ""
+	if len(p.CommandArgs) > 0 {
+		arg = p.CommandArgs[0]
+	}
+
+	deletedSlot, err := r.piketService.DeleteSlotByQuery(ctx, arg, p.MentionedJIDs)
 	if err != nil {
-		_ = r.waClient.SendText(ctx, p.ChatJID, fmt.Sprintf("Gagal menghapus slot: %v", err))
+		_ = r.waClient.SendText(ctx, p.ChatJID, fmt.Sprintf("⚠️ %v", err))
 		return
 	}
-	_ = r.waClient.SendText(ctx, p.ChatJID, fmt.Sprintf("✅ Slot piket #%d berhasil dihapus.", slotID))
+
+	_ = r.waClient.SendText(ctx, p.ChatJID, fmt.Sprintf("✅ Slot piket #%d (%s) berhasil dihapus.", deletedSlot.RotationOrder, deletedSlot.Name))
+}
+
+func (r *Router) handlePiketReset(ctx context.Context, p *ParsedMessage) {
+	err := r.piketService.ResetAllSlots(ctx)
+	if err != nil {
+		_ = r.waClient.SendText(ctx, p.ChatJID, fmt.Sprintf("Gagal reset piket: %v", err))
+		return
+	}
+	_ = r.waClient.SendText(ctx, p.ChatJID, "🗑️ Semua slot piket lele telah berhasil direset / dikosongkan. Silakan daftarkan ulang dengan `/tambahpiket`.")
 }
 
 func (r *Router) handlePiketGanti(ctx context.Context, p *ParsedMessage) {
