@@ -439,7 +439,7 @@ func (r *Router) notifyAdminsNewProof(ctx context.Context, name, phone, invNumbe
 // Admin Commands
 
 func (r *Router) isAdminSender(p *ParsedMessage) bool {
-	isAdmin := r.cfg.IsAdmin(p.SenderJID, p.SenderAltJID, p.ChatJID, p.SenderPhone)
+	isAdmin := r.cfg.IsAdmin(p.SenderJID, p.SenderAltJID, p.SenderPhone)
 	if !isAdmin {
 		log.Printf("[Admin Auth] Access DENIED for Sender=%s (Alt=%s, Chat=%s, Phone=%s, PushName=%q). Configured Admins: %v",
 			p.SenderJID, p.SenderAltJID, p.ChatJID, p.SenderPhone, p.PushName, r.cfg.AdminJIDs)
