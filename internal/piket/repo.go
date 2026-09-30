@@ -240,10 +240,14 @@ func (r *Repo) DeleteSlot(ctx context.Context, slotID int64) error {
 	return err
 }
 
-// ResetAllSlots deletes all piket slots.
+// ResetAllSlots deletes all piket slots and clears pending logs.
 func (r *Repo) ResetAllSlots(ctx context.Context) error {
 	_, err := r.db.ExecContext(ctx, "DELETE FROM piket_slots")
-	return err
+	if err != nil {
+		return err
+	}
+	_, _ = r.db.ExecContext(ctx, "UPDATE piket_logs SET assigned_members_display = 'Belum diatur', slot_id = NULL WHERE status = 'PENDING'")
+	return nil
 }
 
 // GetLogByDate returns the feeding log for the specified date string (YYYY-MM-DD).

@@ -117,11 +117,22 @@ func (s *Service) DeleteSlotByQuery(ctx context.Context, query string, mentioned
 			if err != nil {
 				return nil, err
 			}
-			if slot == nil {
-				return nil, fmt.Errorf("jadwal piket hari %s belum diatur", dayName)
+
+			// Delete from piket_slots
+			_ = s.repo.DeleteSlotByDay(ctx, dayOrder)
+
+			// Also reset any pending log for this day
+			loc := s.cfg.AppTimezone
+			if loc == nil {
+				loc = time.Local
 			}
-			if err := s.repo.DeleteSlotByDay(ctx, dayOrder); err != nil {
-				return nil, err
+			today := time.Now().In(loc)
+			diff := int(wd) - int(today.Weekday())
+			targetDateStr := today.AddDate(0, 0, diff).Format("2006-01-02")
+			_ = s.repo.UpdateAssignedMembers(ctx, targetDateStr, "Belum diatur")
+
+			if slot == nil {
+				return &Slot{Name: dayName}, nil
 			}
 			return slot, nil
 		}
@@ -236,28 +247,28 @@ func (s *Service) GetSlotAndLogForDate(ctx context.Context, targetDate time.Time
 		return nil, nil, err
 	}
 
-	if logRecord == nil {
-		var slotID *int64
-		display := "Semua Anggota (Piket Bersama 🐟✨)"
-		if !isSunday {
-			if assignedSlot != nil && len(assignedSlot.Members) > 0 {
-				slotID = &assignedSlot.ID
-				var names []string
-				for _, m := range assignedSlot.Members {
-					user := m.PhoneNumber
-					if m.WhatsAppJID != "" {
-						if parts := strings.Split(m.WhatsAppJID, "@"); len(parts) > 0 && parts[0] != "" {
-							user = parts[0]
-						}
+	var slotID *int64
+	display := "Semua Anggota (Piket Bersama 🐟✨)"
+	if !isSunday {
+		if assignedSlot != nil && len(assignedSlot.Members) > 0 {
+			slotID = &assignedSlot.ID
+			var names []string
+			for _, m := range assignedSlot.Members {
+				user := m.PhoneNumber
+				if m.WhatsAppJID != "" {
+					if parts := strings.Split(m.WhatsAppJID, "@"); len(parts) > 0 && parts[0] != "" {
+						user = parts[0]
 					}
-					names = append(names, "@"+user)
 				}
-				display = strings.Join(names, " & ")
-			} else {
-				display = "Belum diatur"
+				names = append(names, "@"+user)
 			}
+			display = strings.Join(names, " & ")
+		} else {
+			display = "Belum diatur"
 		}
+	}
 
+	if logRecord == nil {
 		newLog := &Log{
 			FeedingDate:            dateStr,
 			SlotID:                 slotID,
@@ -268,11 +279,21 @@ func (s *Service) GetSlotAndLogForDate(ctx context.Context, targetDate time.Time
 			return nil, nil, fmt.Errorf("failed to create piket log: %w", err)
 		}
 		logRecord = newLog
-	} else if isSunday && logRecord.SlotID != nil {
-		// Healing: update previously generated Sunday log to Piket Bersama
-		logRecord.SlotID = nil
-		logRecord.AssignedMembersDisplay = "Semua Anggota (Piket Bersama 🐟✨)"
-		_ = s.repo.UpdateAssignedMembers(ctx, dateStr, logRecord.AssignedMembersDisplay)
+	} else if logRecord.Status == StatusPending {
+		// Sync log with current slot configuration if it hasn't been fed yet
+		if assignedSlot == nil && !isSunday && logRecord.AssignedMembersDisplay != "Belum diatur" {
+			logRecord.SlotID = nil
+			logRecord.AssignedMembersDisplay = "Belum diatur"
+			_ = s.repo.UpdateAssignedMembers(ctx, dateStr, "Belum diatur")
+		} else if isSunday && logRecord.SlotID != nil {
+			logRecord.SlotID = nil
+			logRecord.AssignedMembersDisplay = "Semua Anggota (Piket Bersama 🐟✨)"
+			_ = s.repo.UpdateAssignedMembers(ctx, dateStr, logRecord.AssignedMembersDisplay)
+		} else if assignedSlot != nil && (logRecord.SlotID == nil || *logRecord.SlotID != assignedSlot.ID) {
+			logRecord.SlotID = &assignedSlot.ID
+			logRecord.AssignedMembersDisplay = display
+			_ = s.repo.UpdateAssignedMembers(ctx, dateStr, display)
+		}
 	}
 
 	return logRecord, assignedSlot, nil
@@ -336,6 +357,7 @@ func (s *Service) GetWeeklySchedule(ctx context.Context, now time.Time) ([]DaySc
 
 		var slotName string
 		var members []Member
+		customDisplay := ""
 
 		if isSunday {
 			slotName = "Piket Bersama"
@@ -343,15 +365,30 @@ func (s *Service) GetWeeklySchedule(ctx context.Context, now time.Time) ([]DaySc
 			if sl, ok := slotMap[dc.order]; ok {
 				slotName = sl.Name
 				members = sl.Members
+
+				// Only check customDisplay if slot is configured and was swapped for this date
+				logRecord, _ := s.repo.GetLogByDate(ctx, targetDateStr)
+				if logRecord != nil && logRecord.AssignedMembersDisplay != "" && logRecord.AssignedMembersDisplay != "Belum diatur" {
+					// Check if display differs from default
+					var names []string
+					for _, m := range members {
+						user := m.PhoneNumber
+						if m.WhatsAppJID != "" {
+							if parts := strings.Split(m.WhatsAppJID, "@"); len(parts) > 0 && parts[0] != "" {
+								user = parts[0]
+							}
+						}
+						names = append(names, "@"+user)
+					}
+					defaultDisplay := strings.Join(names, " & ")
+					if logRecord.AssignedMembersDisplay != defaultDisplay {
+						customDisplay = logRecord.AssignedMembersDisplay
+					}
+				}
 			} else {
 				slotName = "Belum diatur"
+				customDisplay = ""
 			}
-		}
-
-		customDisplay := ""
-		logRecord, _ := s.repo.GetLogByDate(ctx, targetDateStr)
-		if logRecord != nil && logRecord.AssignedMembersDisplay != "" {
-			customDisplay = logRecord.AssignedMembersDisplay
 		}
 
 		schedule = append(schedule, DaySchedule{
